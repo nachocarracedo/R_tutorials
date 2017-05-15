@@ -1,0 +1,442 @@
+---
+title: "College Score Card"
+author: "Ignacio Carracedo"
+date: "March 17, 2017"
+output:
+  html_document:
+    toc: true
+    theme: united
+---
+
+## Introduction
+
+The U.S Department of education released the College Scorecard data set, which provides information about institutions of higher education in the U.S. This initiative called for by President Obama brings an independent review of colleges and it helps students and parents to tackle the challenge of choosing between institutions and it gives them the chance to compare institutions based on the cost, graduation rates, size, admissions, and future earnings among other factors.
+
+
+## Objectives
+
+The main objective of this report is to study institutions by student demographics. This report provides the reader with information on this topic and how it relates with other factors as degrees offered by type of institution. This report uses association rules and clustering techniques to answer questions as:
+
+* How do student demographics relate to type of institution and degrees offered by institutions? 
+* Can we group institutions by demographics? 
+* What is the best number of groups to have?
+* What are the characteristics of these groups?
+
+
+## Dataset preparation
+
+We download the College Scoreboard data set. The data set is a zip file that includes several csv files; there is one file per school year starting in 1996/97 and ending in 2014/15. Even though we download all files this report only uses the most up-to-date data from the school year 2014/15. The reason for only using the most up-to-date school year is that this report aims to provide accurate information about how the institution are today.
+
+First, we import all the libraries used in this report:
+
+```{r, message=FALSE, warning=FALSE}
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(ggmap)
+library(arules)
+library(cluster)
+library(dbscan)
+library(clValid) 
+library(scatterplot3d)
+```
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+setwd("C:/Users/carrai1/Desktop/Projects/college_classification_tutorial/datasets/collegescorecard")
+scorecard.df = read.csv("college2014.csv",na.strings=c("","NULL","PrivacySuppressed"))
+# convert columns to factors
+scorecard.df$CONTROL <- as.factor(scorecard.df$CONTROL)
+scorecard.df$PREDDEG <- as.factor(scorecard.df$PREDDEG)
+scorecard.df$CCBASIC <- as.factor(scorecard.df$CCBASIC)
+```
+
+Now that we have the zip file the next cell performs the following steps to merge all files:
+
+* set working directory and add all csv file names to a list.
+* loop through the list with all file names:
+
+     + read file.
+     + lower case columns (for better readability)
+     + add year column.
+     + transform some columns to strings due to issues concatenating.
+     + concatenate.
+  
+Once the loop is done the final `data.frame` is ready. At the end, the `data.frame` is saved so we don't have to repeat these steps again. When loading the new csv file, all strings that are `NULL`,`PrivacySuppressed`, or empty strings, will be converted to `NULL` values.
+
+The last step is to keep only rows from school year 2014/15 and to convert to `factor` some of the categorical columns (`CONTROL`,`PREDDEG`,`CCBASIC`):
+
+
+```{r,  message=FALSE, warning=FALSE, eval=FALSE}
+# load datasets
+setwd("C:\\Users\\carrai1\\Desktop\\Projects\\college_score_card\\input\\")
+file_list <- list.files()
+
+scorecard = data.frame()
+
+for (file in file_list) {
+  # bring in the data
+  tmp = read.csv(file)
+  colnames(tmp) = tolower(colnames(tmp))
+  # extract the year from the file name
+  YEAR = str_extract(file, "[0-9]{4}")
+  # append that year to the file
+  tmp$year = YEAR
+  # fix problem columns that change types-- because why wouldnt they?
+  tmp$zip = as.character(tmp$zip)
+  tmp$st_fips = as.character(tmp$st_fips)
+  tmp$region = as.character(tmp$region)
+  tmp$control = as.character(tmp$control)
+  tmp$opeid = as.character(tmp$opeid)
+  tmp$iclevel = as.character(tmp$iclevel)
+  tmp$hcm2 = as.character(tmp$hcm2)
+  tmp$curroper = as.character(tmp$curroper)
+  # append the data
+  scorecard = bind_rows(scorecard, tmp)
+  # cleanup
+  rm(tmp, YEAR)
+  cat("finished ", file, "\n")
+} 
+
+# save final file
+write.csv(file=("scorecard.csv"), x=scorecard, row.names = FALSE)
+# load final file ("NULL" or empty string to NA)
+setwd("C:\\Users\\carrai1\\Desktop\\Projects\\college_score_card\\input\\")
+scorecard.df = read.csv("scorecard.csv",na.strings=c("","NULL","PrivacySuppressed"))
+scorecard.df %>% filter(year==2014) -> scorecard.df
+# convert columns to factors
+scorecard.df$CONTROL <- as.factor(scorecard.df$CONTROL)
+scorecard.df$PREDDEG <- as.factor(scorecard.df$PREDDEG)
+scorecard.df$CCBASIC <- as.factor(scorecard.df$CCBASIC)
+```
+
+Next, we looked at missing values. We want to keep columns with few missing values. The results (of clustering/association rules) are more reliable if there are few or none missing values. The following cell of code will show columns with less than 10% missing values:
+
+
+```{r, message=FALSE, warning=FALSE, eval=TRUE}
+## missing values < 10%
+mv <- sapply(scorecard.df, function(x) sum(is.na(x)))
+head(mv[mv<dim(scorecard.df)[1]*0.1],50) # less than 10% missing values
+```
+
+The output is trimmed and it only shows the first 50 values due to it's length. This output was used to get a shortlist of variables for the analysis. This shortlist was further curated focusing on demography. We also keep other features as `CONTROL`, and `PREDDEG` that group institutions.
+
+## Dataset description
+
+The following table provides information of each feature used in this report, the table shows information such as category, units, and a short description of the feature:
+
+| Feature            | Category      |  Units        |  Description
+| ------------------ | ------------- | ------------- | -------------
+| instnm             | NA            | NA            | Institution name
+| year               | NA            | NA            | School year, eg. 2003 is school year 2003/2004
+| control            | NA            | NA            | Type of institution 
+| preddeg            | school        | NA            | Predominant undergraduate degree awarded
+| ugds_white         | student       | percent       | Total share of enrollment of undergraduate degree-seeking students who are white  
+| ugds_black         | student       | percent       | Total share of enrollment of undergraduate degree-seeking students who are black
+| ugds_hisp          | student       | percent       | Total share of enrollment of undergraduate degree-seeking students who are Hispanic
+| ugds_asian         | student       | percent       | Total share of enrollment of undergraduate degree-seeking students who are Asian
+
+
+## Association rules
+
+In this section we find relations between type of institution and student demographics. We use association rules which is a technique that finds frequent co-occurring associations among a collection of items.
+
+First, we select the variables we are interested in:
+
+```{r, message=FALSE, warning=FALSE}
+scorecard.df %>% select(CONTROL,PREDDEG,UGDS_WHITE,
+                        UGDS_BLACK,UGDS_HISP,UGDS_ASIAN) -> scorecard.ar.df
+```
+
+We already know from a previous exploration that none of the features selected have more than 10% missing values. Next cell will remove all missing values as there are not many of them. We also check the size of the `data.frame` before and after the removal:
+
+```{r, message=FALSE, warning=FALSE}
+print(paste("Size of data before removing missing values: ",
+            dim(scorecard.ar.df)[1]))
+
+scorecard.ar.df %>% na.omit() -> scorecard.ar.df
+
+print(paste("Size of data after removing missing values: ",
+            dim(scorecard.ar.df)[1]))
+```
+
+We have gone from 7703 rows to 6990 rows which is a very small decrease with little effect in our analysis.
+
+Association rules need categorical variables. Some of the variables we want to examine are continuous variables so we need to transform them into categorical (`Factor`). Next cell introduces a function to divide continuous variables into quantiles, thus, making them categorical variables:
+
+```{r, message=FALSE, warning=FALSE}
+# quartiles
+make.ntiles = function (inputvar, n) {
+  inputvar %>%
+    quantile(.,
+             (1/n) * 1:(n-1),
+             na.rm=TRUE
+    ) %>% 
+    c(-Inf, ., Inf) %>%
+    cut(inputvar,
+        breaks=.,
+        paste("Q", 1:n, sep="")
+    )
+}
+```
+
+We can now use the function above to transform the student demographic features into 3 groups, which will give us information to know if the share of the demographic group is high (`Q1`), medium (`Q2`), or low (`Q3`):
+
+```{r, message=FALSE, warning=FALSE}
+scorecard.ar.df %>% 
+  mutate(UGDS_WHITE=make.ntiles(UGDS_WHITE, 3)) %>%{.} -> scorecard.ar.df
+scorecard.ar.df %>%
+  mutate(UGDS_BLACK=make.ntiles(UGDS_BLACK, 3)) %>%{.} -> scorecard.ar.df
+scorecard.ar.df %>%
+  mutate(UGDS_HISP=make.ntiles(UGDS_HISP, 3)) %>%{.} -> scorecard.ar.df
+scorecard.ar.df %>%
+  mutate(UGDS_ASIAN=make.ntiles(UGDS_ASIAN, 3)) %>%{.} -> scorecard.ar.df
+```
+
+Now we can check the structure of the `data.frame` to make sure  all of our features are `Factor`. We can also see how many levels each `Factor` has:
+
+```{r, message=FALSE, warning=FALSE}
+str(scorecard.ar.df)
+```
+
+As expected, all features are `Factor`, thus, the data is ready for association rules.
+
+Here is a brief explanation of association rules' terms:
+
+* Support: How frequently the rule appears.
+* Confidence: Having *X*  on the left hand side of the rule, Confidence is the rate at which the right hand side of the rule shows up.
+* Lift: Ratio of the confidence of the rule and the expected confidence of the rule. Values above 1 indicate that the rule shows up more often than expected. This metric will be our main focus.
+
+Next cell defines what kind of rules we are looking for. We are only interested in rules where the type of institution (`CONTROL`) is on the left hand side and the demographics are on the right side. We also set thresholds for number of items in the rule, support metric, and confidence metric:
+
+```{r, message=FALSE, warning=FALSE}
+scorecard.ar.df %>% select(CONTROL, UGDS_WHITE,
+                           UGDS_BLACK, UGDS_HISP,
+                           UGDS_ASIAN) -> scorecard.ar.df1
+
+apriori.parameter = list(support=0.05,confidence=0.4,minlen=2,maxlen=7)
+apriori.control = list(verbose=FALSE)
+apriori.appearance = list(rhs=c("UGDS_WHITE=Q1","UGDS_WHITE=Q2","UGDS_WHITE=Q3",
+                                "UGDS_BLACK=Q1","UGDS_BLACK=Q2","UGDS_BLACK=Q3",
+                                "UGDS_HISP=Q1","UGDS_HISP=Q2","UGDS_HISP=Q3",
+                                "UGDS_ASIAN=Q1","UGDS_ASIAN=Q2","UGDS_ASIAN=Q3"), 
+                          lhs=paste0("CONTROL=", unique(scorecard.ar.df$CONTROL)),
+                          default='none')
+
+rules = apriori(scorecard.ar.df1,
+                parameter=apriori.parameter,
+                control=apriori.control,
+                appearance=apriori.appearance)
+
+inspect(sort(rules, by='lift'))
+```
+
+From the output above we can conclude that:
+
+* In Private for profit (`CONTROL=3`) institutions high White demographics(`Q1`), high Asian demographics (`Q1`), and low Black demographics (`Q3`) show up in a higher rate than expected. 
+* In Public institutions (`CONTROL=1`) institutions low White demographics (`Q3`) shows up in a higher rate than expected. 
+* In Private non profit (`CONTROL=2`) institutions low  White demographics (`Q3 `) and high Black demographics (`Q1`) show up in a higher rate than expected. 
+
+Next, we want to do the same exercise but grouping institutions by the predominant undergraduate degree awarded (`PREDDEG`) instead of type of institution (`CONTROL`). Next cell defines the rules; the only difference from the previous cell is that we are adding `PREDDEG` to the right hand side of the rule instead of `CONTROL`:
+
+```{r, message=FALSE, warning=FALSE}
+scorecard.ar.df %>% select(PREDDEG,UGDS_WHITE,UGDS_BLACK,
+                           UGDS_HISP,UGDS_ASIAN) -> scorecard.ar.df2
+
+apriori.parameter = list(support=0.05,confidence=0.4,minlen=1,maxlen=7)
+apriori.control = list(verbose=FALSE)
+apriori.appearance = list(rhs=c("UGDS_WHITE=Q1","UGDS_WHITE=Q2","UGDS_WHITE=Q3",
+                                "UGDS_BLACK=Q1","UGDS_BLACK=Q2","UGDS_BLACK=Q3",
+                                "UGDS_HISP=Q1","UGDS_HISP=Q2","UGDS_HISP=Q3",
+                                "UGDS_ASIAN=Q1","UGDS_ASIAN=Q2","UGDS_ASIAN=Q3"), 
+                          lhs=paste0("PREDDEG=", unique(scorecard.ar.df$PREDDEG)),
+                          default='none')
+
+rules = apriori(scorecard.ar.df2,
+                parameter=apriori.parameter,
+                control=apriori.control,
+                appearance=apriori.appearance)
+#length(rules)
+inspect(sort(rules, by='lift'))
+```
+
+From the output above we can see that:
+
+* Institutions with predominantly bachelor's-degrees (`PREDDEG=3`) usually have very few Asians (`Q3`) and medium numbers for Hispanic and Black demographics (`Q2`)
+* Institutions with predominantly certificate-degrees (`PREDDEG=31`) shows up more often than expected with the highest rate of White people and Asians (`Q1`).
+
+## Clustering
+
+In this section we want to cluster institutions in groups based on student demographics. First, we create a `data.frame` with the features we need (some extra features are added to expand the report in the future): 
+
+```{r, message=FALSE, warning=FALSE}
+scorecard.df.c <- scorecard.df %>% select(INSTNM,CCBASIC,CCUGPROF,CONTROL,
+                                            MAIN,NUMBRANCH,PREDDEG,HIGHDEG,
+                                            PCIP01,PCIP03,PCIP04,PCIP05,
+                                            PCIP09,PCIP10,PCIP11,PCIP12,
+                                            PCIP13,PCIP14,PCIP15,PCIP16,
+                                            PCIP19,PCIP22,PCIP23,PCIP24,
+                                            PCIP25,PCIP26,PCIP27,PCIP29,
+                                            PCIP30,PCIP31,PCIP38,PCIP39,
+                                            PCIP40,PCIP41,PCIP42,PCIP43,
+                                            PCIP44,PCIP45,PCIP46,PCIP47,
+                                            PCIP48,PCIP49,PCIP50,PCIP51,
+                                            PCIP52,PCIP54,UGDS,UGDS_WHITE,
+                                            UGDS_BLACK,UGDS_HISP,UGDS_ASIAN,
+                                            UGDS_AIAN,UGDS_NHPI,UGDS_2MOR,
+                                            UGDS_NRA,UGDS_UNKN,UGDS_MEN)
+```
+
+Next, as we did in the previous section, we remove the missing values and check the number of remaining rows:
+
+```{r, message=FALSE, warning=FALSE}
+print(paste("Size of data before removing missing values: ",dim(scorecard.df.c)[1]))
+scorecard.df.c %>% na.omit() -> scorecard.df.c
+print(paste("Size of data after removing missing values: ",dim(scorecard.df.c)[1]))
+```
+
+We have gone from 7703 rows to 6983 rows. These are similar numbers to what we got in the previous section when we removed missing values; the reduction is less than 10% of total numbers of rows.
+
+Next cell selects the features we will use for clustering: Demographics of White (`UGDS_WHITE`), Black (`UGDS_BLACK`), Asian (`UGDS_ASIAN`), and Hispanic (`UGDS_HISP`) students:
+
+```{r, message=FALSE, warning=FALSE}
+scorecard.df.c %>%
+  select(UGDS_WHITE,UGDS_BLACK,UGDS_HISP, UGDS_ASIAN) %>%
+  scale() -> scorecard.df.dem
+```
+
+We use  **KMEANS** algorithm for clustering (an explanation about why we choose Kmeans comes later in the report).
+
+One of the characteristics of Kmeans is that we need to select the number of clusters (k) prior to clustering. One common way of doing this is to check the elbow graph which plots the *within-cluster sum of squares* against the *number of clusters*. Let's see the elbow plot for 2 to 12 clusters:
+
+```{r, message=FALSE, warning=FALSE}
+# elbow
+wss <- dim(scorecard.df.dem)[0] * dim(scorecard.df.dem)[1]
+for (i in 2:12) {
+  set.seed(3)
+  wss[i] <- sum(kmeans(scorecard.df.dem,centers=i)$withinss)
+} 
+plot(1:12, wss, type="b", xlab="Number of Clusters", ylab="Within groups sum of squares")
+```
+
+From the plot above we see that the more clusters we have the better *within cluster sum of squares* score, however, the biggest improvement occurs during the first 5 clusters, after that, adding new clusters doesn't improve the metric much. 
+
+Using the silhouette analysis we can inspect how good the clustering is; this will give us more information to decide on the number of clusters (k). The silhouette plot displays a measure of how close each point in one cluster is to points in the neighboring clusters; it will compute the metric for each data point with a value ranging between -1 and 1; we look at the average per cluster. Numbers above 0.5 indicate a good separation.
+
+In the cell below we show the average silhouette for kmeans (number of clusters (k) ranging in between 3 and 7):
+
+```{r, message=FALSE, warning=FALSE}
+# silhouette
+for (i in 3:7){
+  set.seed(3)
+  dem.sil = silhouette(kmeans(scorecard.df.dem,centers=i)$cluster,dist(scorecard.df.dem))
+  cat(paste("\n\nKMEANS with k=",i,"\n"))
+  print(summary(dem.sil)$clus.avg.widths)
+}
+```
+
+Kmeans with 5 clusters achieves the best overall separation. This information matches well with the elbow graph where we saw the biggest improvement in *within-cluster sum of squares* right after reaching 5 clusters, more clusters didn't improve the metric. Therefore, we will cluster our data in 5 groups (k=5):
+
+```{r, message=FALSE, warning=FALSE}
+# final Kmeans
+set.seed(3)
+kmeans5 <- kmeans(scorecard.df.dem,centers=5)
+kmeans5.clusters = factor(kmeans5$cluster)
+```
+
+We  now have a new column in our `data.frame` that indicates to which cluster an observation belongs to. Now, we can check how many institutions are inside each group:
+
+```{r, message=FALSE, warning=FALSE}
+table(kmeans5.clusters)
+```
+
+Groups 3 and 1 have the most institutions whereas number 2 has very few.
+
+There are many ways we can try to understand our clusters. For instance, we could look at what institutions are in each cluster and make sense of them, this can be a little tedious though. Another way is to apply a dimensionality reduction algorithm like Principal component Analysis to plot data and explore the clusters visually. We can also create confusion tables. 
+
+We will apply PCA and create confusion tables to make sense of the clusters.
+
+Let's calculate the principal components for our data and check how much variance they explain:
+
+```{r, message=FALSE, warning=FALSE}
+scorecard.df.acad.pca <- prcomp(scorecard.df.dem, center = TRUE, scale. = FALSE)
+kmeans.pca.pred <- predict(scorecard.df.acad.pca, newdata=scorecard.df.dem)
+summary(scorecard.df.acad.pca)
+plot(scorecard.df.acad.pca, type = "l") 
+```
+
+As we can see the first 3 components explain almost 98% of the variance so we'll use them to plot/analyse our clusters. It would have been more convenient to have most of the variance explained by only 2 components to be able to plot in a 2 dimensional space. With 3 we can still plot although it is more difficult to interpret the results.   
+
+Next, we check the loadings of our 3 principal components to get a sense of what each one explains:
+
+```{r, message=FALSE, warning=FALSE}
+loadings <- as.data.frame(scorecard.df.acad.pca$rotation[,c(1,2,3)])
+loadings$dem <- row.names(loadings)
+loadings %>% gather(PCA_loading, value, 1:3) -> loadings
+
+ggplot(data=loadings, aes(x=PCA_loading, y=value, fill=dem)) +
+  geom_bar(position = "dodge",stat = "identity",size=1,alpha = 1)+
+  ggtitle("PCA loadings") +
+  theme(plot.title = element_text(size=16)) 
+```
+
+In Principal component 1 `UGDS_WHITE` is inversely related to the other demographics. Same thing happens for principal component 2 and `UGDS_BLACK`. Principal component 3 follows the same trend with `UGDS_ASIAN`.
+
+Now, let's plot our groups using this 3 principal components:
+
+
+```{r, message=FALSE, warning=FALSE}
+colors <- c("blue", "green", "red","yellow","purple")
+colors <- colors[(kmeans5.clusters)]
+aa <- scatterplot3d(kmeans.pca.pred[,c(1,2,3)],
+              pch = '*',
+              color = colors,
+              main= "3 Principal Components - Clusters",
+              angle=45
+              )
+
+legend("right", legend = levels(kmeans5.clusters),
+       col =  c("blue", "green", "red","yellow","purple"), pch = 16)
+```
+
+The scatter plot shows how our clusters are formed. To complement this information we can transform the demographic features into categorical features and then create confusion tables for each group:
+
+```{r, message=FALSE, warning=FALSE}
+scorecard.df.c %>%
+  select(UGDS_WHITE,UGDS_BLACK,UGDS_HISP, UGDS_ASIAN) %>%
+  mutate(UGDS_WHITE=make.ntiles(UGDS_WHITE, 3),
+         UGDS_BLACK=make.ntiles(UGDS_BLACK, 3),
+         UGDS_HISP=make.ntiles(UGDS_HISP, 3),
+         UGDS_ASIAN=make.ntiles(UGDS_ASIAN, 3)) %>% {.} -> scorecard.df.dem.q3
+
+# show/explain clusters
+table(cluster=kmeans5.clusters, UGDS_WHITE=scorecard.df.dem.q3$UGDS_WHITE)
+table(cluster=kmeans5.clusters, UGDS_BLACK=scorecard.df.dem.q3$UGDS_BLACK)
+table(cluster=kmeans5.clusters, UGDS_HISP=scorecard.df.dem.q3$UGDS_HISP)
+table(cluster=kmeans5.clusters, UGDS_ASIAN=scorecard.df.dem.q3$UGDS_ASIAN)
+```
+
+From the information we have gathered we can conclude that:
+
+* Cluster 1 (blue) : This group dominated by White students but it is the most balanced having the a good representation of all demographics. 
+* Cluster 2 (green): Group with very few Asians which tend to be balanced in the other groups. This is the smallest group in terms of institutions.
+* Cluster 3 (red): Group with very few White students and with big numbers of all other demographic groups. 
+* Cluster 4 (yellow): This group main characteristic is that there are very few Black students. It also has many White students.
+* Cluster 5 (purple): Group that holds institutions with many Black and White students and very few Hispanic.
+
+Other clustering techniques were discarded because they didn't improve the results of Kmeans. To compare results we inspected clusters visually and compared metrics as *within-cluster sum of squares*, connectivity, Dunn, and Silhouette. As an example, next cell compares some of these metrics (the average Silhouette width, Dunn index, and Connectivity) for PAM (Partitioning Around Medoids) and Kmeans:
+
+```{r, message=FALSE, warning=FALSE}
+clmethods <- c("kmeans","pam")
+intern <- clValid(scorecard.df.dem, nClust = 5,clMethods = clmethods, validation = "internal",maxitems = 10000)
+summary(intern)
+```
+
+As we can see, the numbers are very similar, while silhouette and connectivity yield a better number for kmeans, dunn does it for PAM. Numbers are very close and both techniques will output very similar groups. We also implemented DBScan with very poor results, thus, it is not shown in this report.
+
+## Conclusion
+
+The main goal of this report was to provide the reader with a good understanding of institution demographics. We used several techniques for this task that showed how demographics relates to type of institution and preferred degree for an institution. We also clustered all institutions in 5 different groups based on the demographics of students and explained the differences across groups. The reader can make use of this information to select the appropriate institution based on demographics.
+
+

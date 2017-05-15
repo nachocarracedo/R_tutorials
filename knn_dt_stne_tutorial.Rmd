@@ -1,0 +1,646 @@
+---
+title: "An Analysis of Gender and Racial Bias in Post-Secondary Institutions"
+author: "Amber Brodeur & Ignacio (Nacho) Carracedo"
+date: "5/2/2017"
+output:
+  html_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+The United States has a long history of racial and gender discrimination. This study aims to assess whether or not gender and racial bias exists in the admission process in US undergraduate institutions. Under United States law, racial and sex discrimination is prohibited in education. Personally, I (Amber) have experienced sexism in my undergraduate studies as a mathematics major. As I took more challenges math classes, such as "differential equations with linear algebra" and "multi-dimensional calculus," I watched the number of women in my math classes drastically drop, where some days I would count 20-30 women in a 150 person class. Many attempt to justify the numbers by saying, "Women are not interested in STEM," or with a lame attempt to be comical, "Women have smaller brains." Statements like these are false. Women are interested in STEM, but many are deterred/prevented from pursuing STEM because of the sexism that is ubiquitous in society. Many on campus have made statements to me like, "You'll get a great job because you are a women in STEM and business." Statements like these marginalize women -  it says the reason they are hired is only because they are women and companies need to meet diversification requirements, and they are not hired based on their qualifications. At business school in my undergraduate studies, the instructor leading the career development class told us, "If you're a girl, you need to have your hair up for interviews." Well, I have done the opposite of her sexist 'advice' and been offered both internships and jobs. In addition to these, I've experienced a plethora of sexist remarks and behavior. This study will investigate sexist and racial bias in the US through the College Scorecard Dataset. Race and gender variables are investigated in undergraduate schools located in the US and US territories via the College Scorecard Dataset. The College Scorecard Dataset is a collection of open-accessed data on post secondary education in the United States compiled by the US Department of Education using a variety of sources. The College Scorecard dataset is used to assess and investigate undergraduate schools on race and sex variables using decision trees and k-nearest neighbors (KNN) models to classify the target variable in this report. A training dataset is used to create a model and a testing dataset is used to evaluate your model. The hyperparameters are modified to tune each model. The variables chosen for this study are based on race, sex, and size to predict whether a post secondary institution is public, private non-profit, or private for-profit. 
+
+This analysis is of interest because we are curious of how accurately we can predict ownership of a post secondary institution using race and sex variables. In the United States, racism and sexism is ubiquitous.  This study attempts to assess whether or not racism and/or sexism exists in the post secondary education system by determining the accuracy of correctly classifying a sample of universities` ownership (public, private non-profit, or private for-profit) using variables that are ratios based on race and sex to predict the universities ownership class. We will assess if there are differences between correctly or incorrectly classifying an institution as public/private and for-profit/not-for profit, in regards to sexism and racism. If we can predict university ownership based on race/sex variables, such as the ratio of Asian, black, hispanic, white, multi-racial, and the gender of students at institutions, then there must be some degree of racism and sexism in the admission selection process at post secondary institutions in the US. 
+
+# Objective
+
+Decision trees and k-nearest neighbors models are created for the dataset to explore predominantly undergraduate schools via the College Scorecard Dataset. The objective of this study is to conduct an analysis of the post secondary schools by closely examining race and gender measures such as total share of enrollment of undergraduate degree-seeking students who are two or more races and total share of enrollment of undergraduate degree-seeking students who are women. This investigation will include the most recent academic year, 2014-2015. We are interested to find out whether the schools will be correctly classified and to explore the relationships on the selected variables using the decision trees and k-nearest neighbors models created on post secondary institutions. The College Scorecard dataset is used to assess, investigate, and explore the similarities and differences between the different ownership classes on gender and race variables, in this study. 
+
+# Dataset Description
+
+The College ScoreCard dataset can be downloaded from the U.S. Department of Education on the College Scorecard Data website here: https://collegescorecard.ed.gov/data/.[^1] Their website explains that the, "Dataset spans [sic] nearly 20 years of data and covers [sic] multiple sources including the IPEDS, NSLDS, and Department of Treasury."[^2] The data dictionary provides definitions for the variables and other important information about the datset. The data dictionary can be downloaded off from the College Scorecard Data website.
+
+The College Scorecard Dataset is a collection of open-accessed data on post secondary education in the United States. The dataset, while available online, has been compiled by the US Department of Education using a variety of sources. The sources that make up this dataset include the Integrated Post secondary Education Data System (IPEDS), National Student Loan Data System (NSLDS), and Department of Treasury. The College Scorecard website states, "The College Scorecard is designed to increase transparency?? to see how well different schools are serving their students"[^1] 
+
+In this study, the College Scorecard data set examined includes eighteen csv files of data on post secondary educational institutions on the 50 US states, the District of Columbia, and overseas US territories in annual periods by academic year starting in 1996-1997 and ending in 2014-2015. All academic years were included when variables did not have too many missing values. The academic year 2014-2015 is used for analysis, where an academic year starts in August or September and ends in May or June of the next calendar year. The combined eighteen csv files into one data frame contains 1 744 variables on 132 402 observations across 19 academic years. The data types for academic year and state are numeric and character respectively. Some data are protected under privacy laws; these data entries are entered as `PrivacySuppressed`.[^2] These are considered NA values in the analysis. There are ten categories in the dataset including: root, school, academic, admissions, student, cost, aid, repayment, completion, and earnings. The variables selected for this analysis are from three categories: root, academic, and school. 
+
+## Variables
+
+A table of the variables used for analysis is displayed below with descriptions.
+
+Variable Name   | Description  | Unit                     
+ -----------------| -------------------------------- | ------------- 
+UGDS	| Size of school | numeric
+UGDS_2MOR	|  Total share of enrollment of undergraduate degree-seeking students who are two or more races | %
+UGDS_ASIAN	| Total share of enrollment of undergraduate degree-seeking students who are Asian  | %
+UGDS_BLACK	| Total share of enrollment of undergraduate degree-seeking students who are black  | %
+UGDS_HISP		|  Total share of enrollment of undergraduate degree-seeking students who are Hispanic | %
+UGDS_UNKN	|  Total share of enrollment of undergraduate degree-seeking students whose race is unknown | %
+UGDS_WHITE	|  Total share of enrollment of undergraduate degree-seeking students who are white | %
+UGDS_WOMEN	|  Total share of enrollment of undergraduate degree-seeking students who are women | %
+CONTROL	|  ownership  | public, private non-profit, private for-profit
+
+
+# Dataset Preparation
+
+The dataset preparation section describes the steps used to clean and prepare the data for analyses. The data is cleaned and prepared in this section to remove missing values, select variables, and capture observations with specific traits. 
+
+First, the packages used for analysis need to be loaded. Load the libraries:
+```{r, warning=FALSE, message=FALSE}
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(ggmap)
+library(kknn)
+library(caret)
+library(e1071)
+library(rpart)
+```
+
+Options are set to ignore warnings and messages of the `kknn` library. The tibble maximum print is set to infinity, so the information that is printed in a tibble is unlimited. 
+```{r}
+suppressWarnings(suppressMessages(library(kknn)))
+options(tibble.print_max = Inf)
+```
+
+The College Scorecard dataset for the academic year 2014-2015 is read into the R workspace. The parameter `na.strings` is set to identify empty cells and cells with value `NULL` to missing values. The dataset is named `scorecard.all.1415`. 
+```{r}
+scorecard.all.1415 = read.csv(
+  "/Users/amberbrodeur/Desktop/CollegeScorecard_Raw_Data/MERGED2014_15_PP.csv",
+                              na.strings=c("","NULL"))
+```
+
+The vector `features` is created for the variables that were selected to analyze. The target variable is `CONTROL`. 
+```{r}
+features = c('UGDS',
+             'UGDS_2MOR',
+             'UGDS_ASIAN',
+             'UGDS_BLACK',
+             'UGDS_HISP',
+             'UGDS_UNKN',
+             'UGDS_WHITE',
+             'UGDS_WOMEN',
+             'PREDDEG',
+             'CONTROL')
+```
+
+
+The variables in `features` are selected from the dataset `scorecard.all.1415`. The new dataframe is named `scorecard.1415`. 
+```{r}
+scorecard.all.1415 %>% select_(.dots =features) -> scorecard.1415
+```
+
+The `dim` command returns the dimension of the data frame. 
+```{r}
+dim(scorecard.1415)
+```
+
+The data frame `scorecard.1415` has 7 703 observations and 10 variables.
+
+When the csv file was imported into R, the NA values in the file were defined by using the argument `na.strings=c("","NULL")`. Let's take a look at the missing values in the data frame. 
+
+The following code-chunk calculates the total number of NA values in the data frame.
+```{r, warning=FALSE, message=FALSE}
+sum(is.na(scorecard.1415))
+```
+
+The total number of missing values in the dataframe is 5 704.
+
+The following code-chunk is a function used to calculate the number of NA values for each variable. 
+```{r}
+sapply(scorecard.1415, function(x) sum(is.na(x)))
+```
+
+The only two variable that do not have missing values are `PREDDEG` and `CONTROL`. All of the other variables each have 713 missing values. 
+
+The missing values are omitted from the `scorecard.1415` dataframe. The new dataframe is assigned the name `scorecard`.  
+```{r}
+scorecard.1415 %>% na.omit() -> scorecard
+```
+
+The code below returns the dimension of the data frame.
+```{r}
+dim(scorecard)
+```
+Removing the missing values trims the dataframe from 7 703 observations to 6 990 observations. 
+
+The predictor variable `CONTROL` is factored. 
+```{r}
+scorecard$CONTROL <- as.factor(scorecard$CONTROL)
+```
+
+Because the variables gender and race variables are a "total share of enrollment of undergraduate degree-seeking students," the `PREDDEG` variable is used to select undergraduate institutions. Levels 1, 2, and 3 represent undergraduate schools that are predominantly certificate degree granting, predominantly associate degree granting, and predominantly bachelor degree granting, respectively. Levels 0 and 4 represent predominantly non-degree-granting and predominantly graduate degree granting respectively. Levels 0 and 4 do not represent predominantly undergraduate degree granting universities and need to be removed from the dataset. 
+
+The `table` function is used below to build a contingency table that counts the observations in each factor level of PREDDEG. 
+
+```{r}
+table(scorecard$PREDDEG)
+```
+
+There are a combined 28 observations in the factor-levels 0 and 4. 
+
+The code-chunk below removes the levels 0 and 4 of the variable `PREDDEG` from the dataset. The `dim` function returns the dimension of the data frame before and after the levels are removed.
+```{r}
+dim(scorecard)
+scorecard <- scorecard %>%
+  filter(PREDDEG!=0) %>% 
+  filter(PREDDEG!=4) %>%
+  select(-PREDDEG)
+dim(scorecard)
+```
+
+Removing the missing values trims the dataframe from 6 990 observations to 6 962 observations. 
+
+
+Below, the training and testing set sizes are set. The training set is set to 85%, where a random sample of 85% of the number of rows will be taken from the `scorecard` dataframe. Both analysts agreed that the bigger the train, the better. The `floor` command, "Takes a single numeric argument x and returns a numeric vector containing the largest integers not greater than the corresponding elements of x."[^3] The new dataframe is assigned to `smp_size`.
+```{r}
+smp_size <- floor(0.85 * nrow(scorecard))
+smp_size
+```
+
+The `smp_size` vector is equal to 5 917.
+
+The command `set.seed` sets the seed to make the partition reproducible. The seed is set to 123. 
+```{r}
+set.seed(123)
+```
+
+The `seq_len` command generates a sequence for the number of rows in `scorecard`. The `sample` command takes a random sample of the sequence generated, where the `size` parameter is set to the `smp_size` object.  In other words, a sample of size 5 941, 85% of the data, is taken from the `scorecard` dataset. The new dataframe is named `train_ind`. 
+```{r}
+train_ind <- sample(seq_len(nrow(scorecard)), size = smp_size)
+```
+
+The training and testing sets are set below using `train_ind`, where the observations in `train_ind` are all extracted from the scorecard dataset to get the `training` dataset and everything not in `train_ind` that is in the `scorecard` dataframe is set to the `testing` set.
+```{r}
+training <- scorecard[train_ind, ]
+testing <- scorecard[-train_ind, ]
+```
+
+The data preparation is now complete. 
+
+# KNN Analysis
+
+In this section, the k-nearest neighbors (KNN) analysis is performed. 
+
+For each row of the test set, the k nearest training set vectors, according to Minkowski distance, are found. The classification is performed via the maximum of summed kernel densities parameter. It uses kernel functions to weight the neighbors according to their distances. The plot will give the quality of the classification based on the number of neighbors.
+
+Below, a vector named `kernels` is created that includes all kernels that will be checked for the best kernel to use for the kknn model.
+```{r}
+kernels <- c("rectangular" ,  #no weights
+             "triangular", 
+             "epanechnikov" , 
+             "biweight" , 
+             "triweight", 
+             "cos" , 
+             "gaussian", 
+             "rank",
+             "optimal", 
+             "inv")
+```
+
+The `train.kknn` function, from the `kknn` library, "Performs leave-one-out crossvalidation and is computationally very efficient. cv.kknn performs k-fold crossvalidation and is generally slower and does not yet contain the test of different models yet."[^4] Below, the kknn model is performed, and its results are displayed. The kknn model is named `model`. 
+```{r}
+model <- train.kknn(CONTROL ~ ., 
+                    data = training, 
+                    kernel = kernels,
+                    kmax = 10)
+model
+```
+
+The best kernel to use is `inv`, because is has the lowest missclassification error rate, 25%, when kmax=15. The best value for k is 10. A kernel is used as a weighting function in mathematics, and in this case, the `inv` kernel is the inverse function kernel. 
+
+A visual representation of the kernels for the kknn model is displayed below.
+```{r}
+plot(model)
+```
+
+The plot confirms that the `inv` kernel is the best. 
+
+Let's check for k, the number of nearest neighbors, now by comparing the 3 best kernels and increasing kmax from 10 to 15.
+```{r}
+model <- train.kknn(CONTROL ~ ., 
+                    data = training, 
+                    kernel = c("biweight","optimal","inv"),
+                    kmax = 15)
+model
+```
+
+The best kernel is `inv`, because is has the lowest missclassification error rate , 25%, when kmax=15. The best value for k is 14. 
+
+A visual representation of the kernels for the kknn model is displayed below.
+```{r}
+plot(model)
+```
+
+The two analysts disagreed on the number to use for `kmax`. One analyst preferred a more simple model with kmax=5, because this made the model less complex, and adding more only marginally improved the model. The other analyst preferred 10, because this model has better accuracy. Seven was selected. 
+
+Below is the final model is performed using the `inv` kernel, where kmax=7. 
+```{r}
+model <- train.kknn(CONTROL ~ ., 
+                    data = training, 
+                    kernel = "inv",
+                    kmax = 7)
+model
+```
+
+The missclassification error rate for inv is 25.8%. The best value for k is 7. 
+
+A visual representation of the inv kernel for the kknn model is displayed below.
+```{r}
+plot(model)
+```
+
+The plot shows that the misclassification rate decreases as k gets larger.
+
+Now, we are ready to test the model on the test data.
+
+First, we need to remove the target variable `CONTROL` from the predictor variables for the testing data `X.testing` and only include control for the target variable data `y.testing`. 
+```{r}
+X.testing <- testing %>% select(-CONTROL)
+y.testing <- testing %>% select(CONTROL)
+```
+
+The `predict` function from the `stats` package, "Is a generic function for predictions from the results of various model fitting functions. The function invokes particular methods which depend on the class of the first argument." [^5] Below, the predictions on the test set are performed to predict the variable `CONTROL`. 
+```{r}
+prediction <- predict(model, X.testing)
+```
+
+Below, the first 100 predictions of the testing data are displayed. 
+```{r}
+head(prediction, 100)
+```
+
+ Now, let's check details on the correctness of this prediction. 
+
+The `confusionMatrix` function in the `caret` library, "Calculates a cross-tabulation of observed and predicted classes with associated statistics."[^6] 
+```{r}
+confusionMatrix(reference=testing$CONTROL, data=prediction)
+```
+
+
+# Decision Tree
+
+In this section, a decision tree is created using the `rpart` library. This library lets us build a complete tree, possibly quite large and/or complex. After observing the full tree, we decide how much of that model to retain based on the crossvalidation error and complexity parameter (cp). The model reduction process is called pruning. Decision trees are a popular method of modeling because interpretation for a decision tree is visual and easy for the average person to understand. 
+
+Decision trees segment or stratify the predictor space into simpler regions are called rules of splitting. The most important predictor is the first split into two decision groups, followed by other predictors in subsequent splits. The shape and structure of a classification tree is determined by minimizing the classification error rate. 
+
+In classification trees, there is no one single statistical model that is best for all possible datasets; one method may be best for a particular dataset, but may not be for all other similar but different datasets. For decision trees, we choose the method that produces the best results on a particular dataset; competing models can be compared by looking at the misclassfication rate. A pruned tree is almost always better because a full tree is often overfitted and will not predict well. The predictive accuracy of the final tree is assessed on a test set. Measures of model fit are misclassification rate and confusion matrix for trees. Decision trees are not required to follow any particular distribution, unlike some other model types like logistic regression.
+
+First, we build the decision tree using control defaults (minsplit = 20, cp = 0.01 ... ). The tree won't grow much and we are able to plot it, but we probably won't get the best model.
+
+Let's fit the tree:
+```{r}
+fit.defaults <- rpart(CONTROL ~ ., 
+               data = training,
+               control = rpart.control())
+```
+
+We can now print it to see the information at each split. Each line will show (in order):
+
+- Inequality
+- Number of rows in this node
+- Number of incorrectly classified rows in this node
+- Predicted class (class with majority of rows)
+- Proportion of rows in each class 
+- Asterisk indicates a leaf node
+
+Print the tree splits, also known as decision tree induction rules:
+```{r}
+print(fit.defaults)
+```
+
+
+Reminder:
+Control=1-->Public
+Control=2-->Private nonprofit
+Control=3-->Private for-profit
+
+There are six terminal nodes in the decision tree. 
+
+* The decision tree stratifies the schools into six regions of predictor space: 
+
+1.UGDS>=1032.5, UGDS>=3149;
+2. UGDS>=1032.5, UGDS< 3149, UGDS_ASIAN< 0.01115;
+3. UGDS>=1032.5, UGDS< 3149, UGDS_ASIAN>= 0.01115;
+4. UGDS< 1032.5, UGDS_WOMEN< 0.7016, UGDS_WHITE>=0.60915;
+5. UGDS< 1032.5, UGDS_WOMEN< 0.7016, UGDS_WHITE<0.60915;
+6. UGDS< 1032.5, UGDS_WOMEN>= 0.7016
+
+Predictor space one is a public school, predictor space two is a public school, predictor space three is a private non-profit school, predictor space four is a private non-profit school, predictor space five is a private for-profit school, and predictor space six is a private for-profit school.
+
+Decision Rules:
+
+1. If [ (UGDS>=1032.5 and UGDS>=3149) ] then (CONTROL=1)
+2. If [ (UGDS>=1032.5 and UGDS< 3149 and UGDS_ASIAN< 0.01115 ) ] then (CONTROL=1)
+3. If [ (UGDS>=1032.5 and UGDS< 3149 and UGDS_ASIAN>= 0.01115 ) ] then (CONTROL=2)
+4. If [ (UGDS< 1032.5 and UGDS_WOMEN< 0.7016 and UGDS_WHITE>=0.60915 ) ] then (CONTROL=2)
+5. If [ (UGDS< 1032.5 and UGDS_WOMEN< 0.7016 and UGDS_WHITE<0.60915 ) ] then (CONTROL=3)
+6. If [ (UGDS< 1032.5 and UGDS_WOMEN>= 0.7016) ] then (CONTROL=3)
+
+
+Plot the tree for a visual representation:
+```{r}
+plot(fit.defaults, uniform=TRUE, 
+     main="Classification Tree")
+text(fit.defaults, use.n=TRUE, all=TRUE, cex=.8)
+```
+
+Now, we check how this [default] model does on unseen data:
+```{r}
+prediction.default <- predict(fit.defaults, 
+                              X.testing, 
+                              type = c("class"))
+
+confusionMatrix(reference=testing$CONTROL, data=prediction.default)
+```
+
+This model performs with 71% accuracy. To achieve better results, we can let the model choose when to prune the tree.
+
+The next step is to test and train the model. 
+
+First, we fit the tree on the training data with no pruning using the `rpart` function.
+```{r}
+fit <- rpart(CONTROL ~ ., 
+             data = training,
+             control = rpart.control(cp=0, minbucket=0))
+```
+
+The code to print the full-tree is below. This code-chunk is not evaluated, because the output was indecipherable due to the extremely large size of the full-tree with no pruning.  
+```{r, eval=FALSE}
+plot(fit, uniform=TRUE, 
+     main="Classification Tree")
+text(fit, use.n=TRUE, all=TRUE, cex=.8)
+```
+
+The splits for the full tree can be displayed using the following command. This command is not evaluated due to the large size of the splits.
+```{r, eval=FALSE}
+print(fit) 
+```
+
+
+To avoid overfitting, we want to add control parameters to prune the tree. To do this, we leverage cp (complexity parameter) and the crossvalidation error at each split.
+
+The `printcp` command is used to display the cp table for the `rpart` object `fit` to determine the amount of pruning needed.
+```{r}
+printcp(fit)
+```
+
+The `xerror` column contains the cross-validation error for that split. We want the complexity threshold corresponding to the first line with the smallest `xerror` values. Observing the table, we find row 23 has the smallest `xerror` value at 0.5278 with cp=0.00098007. Let's take a look at this visually.
+
+To determine the amount of pruning needed we also used the `plotcp` command from the `rpart` library. The `plotcp` command is used to provide a visual representation of the cp (complexity parameter) and the crossvalidation error at each split.
+```{r}
+plotcp(fit)
+```
+
+It is hard to determine the lowest cp in the graphical representation of `cp` and `xerror`. At some point the improvement is marginal, if any improvement at all, then the model starts to get worse.
+
+The following command retrieves this value from the table. 
+```{r}
+bestcp <- fit$cptable[which.min(fit$cptable[,"xerror"]),"CP"]
+bestcp
+```
+
+The `bestcp` is 0.00098007.
+
+Below, the tree is pruned using this "best" complexity parameter.
+```{r}
+fit.pruned <- prune(fit, cp = bestcp)
+```
+
+Print the nodes/splits:
+```{r, results="hide"}
+print(fit.pruned)
+```
+
+The tree has a lot of splits. This may suggest that the model is overly complex and we may want to reconsider the pruning parameter. This tree was pruned using the "best" complexity parameter, perhaps a different algorithm would work better or pruning the tree more.
+
+Below, the pruned tree is plotted. 
+```{r, results="hide"}
+plot(fit.pruned, uniform=TRUE, 
+     main="Classification Tree")
+text(fit.pruned, use.n=TRUE, all=TRUE, cex=.8)
+```
+
+Now, it is visually obvious that the pruned tree is still too large.
+
+The command below plots the cp and xerror terms for the pruned tree.
+```{r}
+plotcp(fit.pruned) 
+```
+
+After the 7th split, there is not much improvement in the model. The model only marginally improves while the complexity increases with adding more splits.  
+
+Let's check variable importance. The higher the number the better.
+```{r}
+fit.pruned$variable.importance
+```
+
+The higher the number, the more important the variable. The three most important variables are `UGDS`, `UGDS_WOMEN`, and `UGDS_WHITE`. This indicates that the size of the school has the most impact on the model, followed by gender and the white race. This suggests that the admission process is biased towards gender and race in undergraduate institutions in the US. 
+
+Below, we predict on the test set to see how the model does on unseen data.
+```{r}
+prediction.rpart <- predict(fit.pruned, X.testing, type = c("class"))
+```
+
+Display the details on the correctness of this prediction.
+```{r}
+confusionMatrix(reference=testing$CONTROL, data=prediction.rpart)
+```
+
+We get similar results as with KNN. 
+
+# BONUS
+
+This section is provided as a bonus, because we were extra ambitious in exploring other models and parameters that might better represent the data. 
+
+## t-Distributed Stochastic Neighbor Embedding (t-SNE)
+
+In this section, we want to get a better sense of how the data looks. To do this we apply a dimensionality reduction technique called t-Distributed Stochastic Neighbor Embedding (t-SNE) using the `Rtsne` library. t-SNE is a non-linear dimensionality reduction algorithm used for exploring high-dimensional data. It maps multi-dimensional data to two or more dimensions suitable for human observation. This model usually yields better results than PCA. In our case, PCA didn't work because all principal components explained the same amount of variance which made it difficult to keep only 2 (to plot) while also keeping the underlying geometry of the data. The most important parameter of the t-SNE model is perplexity, which says how to balance attention between local and global aspects of your data.  To tune it up we tried many combinations, most of the yield the same geometry for the data which is a good sign the model is converging.
+
+Load the `Rtsne` library.
+```{r}
+library("Rtsne")
+```
+
+For t-SNE, a couple of the parameters, namely `perplexity` and `max_iter`, need to be set up, usually by trial and error. One of the features of "t-SNE is a tuneable parameter, 'perplexity,' which says (loosely) how to balance attention between local and global aspects of your data. The parameter is, in a sense, a guess about the number of close neighbors each point has."[^8] The parameter `max_iter` is the number of iterations.
+
+
+Next, we apply the model to our training data to see how it looks in a 2-dimensional space, coloring it by the type of institution.
+
+
+First, we need to remove the target variable `CONTROL` from the predictor variables for the training data `X.training` and only include `CONTROL` for the target variable data `y.training`. 
+```{r}
+# training data
+X.training <- training %>% select(-CONTROL)
+y.training <- training %>% select(CONTROL)
+```
+
+The `Rtsne` function, performs Barnes-Hut t-distributed stochastic neighbor embedding. Below, the t-SNE model is performed on the `X.training` data. The t-SNE model is named `tsne.knn`.
+```{r}
+tsne <- Rtsne(X.training, 
+                  dims = 2, 
+                  perplexity=200, 
+                  verbose=FALSE, 
+                  max_iter = 2000, 
+                  check_duplicates = FALSE)
+```
+
+
+The t-SNE model contains an element `Y`, which is the "Matrix containing the new representations for the object."[^7] Below, `Y` is binded to the `y.training`.  The object is saved as `train.viz`.
+```{r}
+train.viz = bind_cols(data.frame(tsne$Y),
+                    y.training)
+```
+
+The columns for `train.viz` are given names.
+```{r}
+colnames(train.viz) <- c("X1_tSNE", "X2_tSNE", "Label")
+```
+
+The plot below is the graphical display of the t-SNE model with the different target classes represented by color. 
+
+```{r}
+ggplot(train.viz,aes(x=X1_tSNE,
+                   y=X2_tSNE,
+                   color=Label,
+                   alpha = 0.3)) +
+  geom_point(size=1.5,
+             alpha = 0.3) +
+  ggtitle("t-SNE (2 dimensions) - TRAINING DATA") +
+  scale_color_manual(values=c("blue", "red","green"))
+```
+
+
+The geometry of the data is a curved line, but the most important takeaway is that class number 2 is mixed with class 1 and 3 in the middle of this line. This explains why we didn't do well predicting this class as its data points are difficult to differentiate. Classes 1 and 3 are more localized at both ends of the line which make them easier to predict.
+
+Now, we can check our predictions for KNN and DT using this same technique. 
+
+### KNN
+
+To plot KNN using t-SNE, we need to extract 2 dimensions from the t-SNE model and then combine the prediction column of KNN to the t-SNE results using the `bind_cols` command.
+
+The `Rtsne` function, performs Barnes-Hut t-distributed stochastic neighbor embedding. Below, the t-SNE model is performed. The t-SNE model is named `tsne.knn`.
+```{r}
+tsne.knn <- Rtsne(X.testing, 
+                  dims = 2, 
+                  perplexity=75, 
+                  verbose=FALSE,
+                  max_iter = 3000, 
+                  check_duplicates = FALSE)
+```
+
+The t-SNE model contains an element `Y`, which is the "Matrix containing the new representations for the object."[^7] Below, `Y` is binded to the `y.testing`.  The object is saved as `knn.viz`.
+```{r}
+knn.viz = bind_cols(data.frame(tsne.knn$Y),
+                    y.testing)
+```
+
+Below, `prediction` from the knn is binded to `knn.viz`.
+```{r}
+knn.viz = bind_cols(knn.viz,
+                    data.frame(prediction))
+```
+
+The columns for `knn.viz` are given names.
+```{r}
+colnames(knn.viz) <- c("X1_tSNE", "X2_tSNE", "Label","Prediction")
+```
+
+The plot below is the graphical display of t-SNE model with the KNN predictions represented by color and the actual values represented by shape.
+```{r}
+ggplot(knn.viz,aes(x=X1_tSNE,
+                   y=X2_tSNE,
+                   color=Prediction,
+                   shape=Label,
+                   alpha = 0.3)) +
+  geom_point(size=1.5,alpha = 0.3)+
+  ggtitle("t-SNE (2 dimensions) - KNN") +
+  scale_color_manual(values=c("blue", "red","green")) 
+```
+
+The shape of the line is a bit different than on the previous plot because here we are representing test data instead of the training data. The plot shows how the predictions for class 1 (blue) and class 3 (green) are localized at both ends of the line and their separation from other classes is quite clear. On the other hand, class 2 (red) predictions are more scattered; these predictions were not very accurate due to the geometry of the data as we showed when plotting t-SNE for the training data.
+
+### Tree
+
+We repeat the procedure, this time using our tree model.
+
+Below, the t-SNE model is performed, again using the `Rtsne` function using the same parameters as above. The t-SNE model is named `tsne.dt`.
+```{r}
+tsne.dt <- Rtsne(X.testing, 
+                 dims = 2,
+                 perplexity=75, 
+                 verbose=FALSE, 
+                 max_iter = 3000, 
+                 check_duplicates = FALSE)
+```
+
+The t-SNE model contains an element `Y`, which is the "Matrix containing the new representations for the object."[^7] Below, `Y` is binded to the `y.testing`. The object is saved as `dt.viz`.
+```{r}
+dt.viz = bind_cols(data.frame(tsne.dt$Y),
+                     y.testing)
+```
+
+Below, `prediction` from the decision tree is binded to `dt.viz`.  
+```{r}
+dt.viz = bind_cols(dt.viz,
+                    data.frame(prediction.rpart))
+```
+
+The columns for `dt.viz` are given names.
+```{r}
+colnames(dt.viz) <- c("X1_tSNE", "X2_tSNE", "Label","Prediction")
+```
+
+The plot below is the graphical display of t-SNE model with the decision tree predictions represented by color and the actual values represented by shape.
+```{r}
+ggplot(dt.viz,aes(x=X1_tSNE,
+                  y=X2_tSNE,
+                  color=Prediction,
+                  shape=Label)) +
+  geom_point(size=1.5,alpha = 0.3)+
+  ggtitle("t-SNE (2 dimensions) - Decision Tree") +
+  scale_color_manual(values=c("blue", "red","green"))
+```
+
+The plot above is very similar to the knn t-SNE plot. Class 1 and 3 predictions are more clustered than class 2 predictions, which yielded bad prediction results. 
+
+# Conclusion
+
+From the analysis of sex and racial bias in US postsecondary institutions, we can state the following conclusions:   
+
+* The most important feature is size of the school, not racial/gender features. We can see this checking the splits of the tree. The three most important variables are `UGDS`, `UGDS_WOMEN`, and `UGDS_WHITE`. This indicates that the size of the school has the most impact on the decision tree model, followed by gender and the white race. This suggests that the admission process is biased towards gender and race in undergraduate institutions in the US. 
+
+* The decision tree rules show how gender and race can be used to determine whether a post secondary institution is public, private non-profit, or private for-profit. Decision Rules: (for default parameters)
+
+1. If [ (UGDS>=1032.5 and UGDS>=3149) ] then (CONTROL=1)
+2. If [ (UGDS>=1032.5 and UGDS< 3149 and UGDS_ASIAN< 0.01115 ) ] then (CONTROL=1)
+3. If [ (UGDS>=1032.5 and UGDS< 3149 and UGDS_ASIAN>= 0.01115 ) ] then (CONTROL=2)
+4. If [ (UGDS< 1032.5 and UGDS_WOMEN< 0.7016 and UGDS_WHITE>=0.60915 ) ] then (CONTROL=2)
+5. If [ (UGDS< 1032.5 and UGDS_WOMEN< 0.7016 and UGDS_WHITE<0.60915 ) ] then (CONTROL=3)
+6. If [ (UGDS< 1032.5 and UGDS_WOMEN>= 0.7016) ] then (CONTROL=3)
+
+* Both the KNN and decision tree models yield similar results, DT being slightly better. The models perform very well on class 3 (Sensitivity around 0.89), ok on class 1 (0.73) and not as good on class 2 (0.48). This means that the models can predict well whether a school is public or private for-profit. This suggests that there is more gender and racial bias at private for-profit public institutions than at private non-profit institutions.
+
+* In our case, PCA didn't work because all principal components explained the same amount of variance which made it difficult to keep only 2 (to plot), while also keeping the underlying geometry of the data.
+
+* In the t-sne model, the geometry of the data is a curved line, but the most important takeaway is that class number 2 is mixed with class 1 and 3 in the middle of this line. This explains why we didn't do well predicting this class as its data points are difficult to differentiate. Classes 1 and 3 are more localized at both ends of the line which make them easier to predict.
+
+Altogether, we conclude that in the admission process for undergraduate postsecondary institutions, there is some level of racial and gender bias, on the basis that we can predict whether a school is public, private nonprofit, and private for-profit. 
+
+[^1]: https://collegescorecard.ed.gov/data/
+[^2]: https://collegescorecard.ed.gov/data/documentation/
+[^3]: R Documentation; Round {base}
+[^4]: R Documentation; train.kknn {kknn}
+[^5]: R Documentation; predict {stats}
+[^6]: R Documentation; confusionMatrix {caret}
+[^7]: R Documentation; Rtsne {Rtsne}
+  

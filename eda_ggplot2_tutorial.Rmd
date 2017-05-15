@@ -1,0 +1,563 @@
+---
+title: "College Score Card"
+author: "Ignacio Carracedo"
+date: "February 14, 2017"
+output:
+  html_document:
+    toc: true
+    theme: united
+---
+
+## Introduction
+
+The U.S Department of education released the College Scorecard data set, which provides information about institutions of higher education in the U.S. This initiative called for by President Obama brings an independent review of colleges and it helps students and parents to tackle the challenge of choosing between them giving them the chance to compare institutions based on the cost, graduation rates, size, admissions, and future earnings among other factors.
+
+
+## Objectives
+
+The main objective of this report is to study and compare the three different types of institutions in higher education:
+
+* Public: Institution that is run for the public to use.
+
+* Private non-profit: Institution that offers a learning environment designed first and foremost to serve students' interests.
+
+* Private for profit: Institutions that must provide adequate financial returns for their shareholders and stakeholders. 
+
+Every type of institution differs from the others in the way the approach education. These different approaches have been subject of big debate, non-profit and public are often view as places that focus on helping students finish their college degrees and achieve career success, whereas private for-profit institutions making a profit is an absolute priority.
+
+This report provides the reader with information on how each type of institution works and how they compare to each other. The report concentrates on how each type of institution relates with the different categories of the education system as school characteristics, admissions, academics, cost and earnings. 
+
+
+## Dataset preparation
+
+We are going to download the College Scoreboard data set. The data set is a zip file that compressed several csv files, one per school year, starting in 1996/97 and ending in 2014/15. All years will be used during this analysis, thus, we need to extract all files and concatenate them together to have the full data set.
+
+First, we import all the libraries used in this notebook.
+
+```{r, message=FALSE, warning=FALSE}
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(ggmap)
+```
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+setwd("C:\\Users\\carrai1\\Desktop\\Projects\\college_score_card\\input\\")
+scorecard.df = read.csv("scorecard_features.csv")
+scorecard.df$control <- as.factor(scorecard.df$control)
+scorecard.df$preddeg <- as.factor(scorecard.df$preddeg)
+```
+
+Once we have downloaded and extracted the files we will:
+
+* Set working directory and add all csv file names to a list.
+* Loop through the list with all file names:
+  + read file.
+  + lower case columns (for better readability).
+  + add year column.
+  + transformed some columns to strings due to issues concatenating.
+  + concatenate.
+  
+Once the loop is done the final data frame will be ready. At the end, the data frame is saved so this operation doesn't have to be repeated. When reading the csv file, all strings that are either `NULL` or empty strings will be converted to NULL values.
+
+
+```{r,  message=FALSE, warning=FALSE, eval=FALSE}
+# load datasets
+setwd("C:\\Users\\carrai1\\Desktop\\Projects\\college_score_card\\input\\")
+file_list <- list.files()
+
+scorecard = data.frame()
+
+for (file in file_list) {
+  # bring in the data
+  tmp = read.csv(file)
+  colnames(tmp) = tolower(colnames(tmp))
+  # extract the year from the file name
+  YEAR = str_extract(file, "[0-9]{4}")
+  # append that year to the file
+  tmp$year = YEAR
+  # fix problem columns that change types-- because why wouldnt they?
+  tmp$zip = as.character(tmp$zip)
+  tmp$st_fips = as.character(tmp$st_fips)
+  tmp$region = as.character(tmp$region)
+  tmp$control = as.character(tmp$control)
+  tmp$opeid = as.character(tmp$opeid)
+  tmp$iclevel = as.character(tmp$iclevel)
+  tmp$hcm2 = as.character(tmp$hcm2)
+  tmp$curroper = as.character(tmp$curroper)
+  # append the data
+  scorecard = bind_rows(scorecard, tmp)
+  # cleanup
+  rm(tmp, YEAR)
+  cat("finished ", file, "\n")
+} 
+
+# save final file
+write.csv(file=("scorecard.csv"), x=scorecard, row.names = FALSE)
+# load final file ("NULL" or empty string to NA)
+setwd("C:\\Users\\carrai1\\Desktop\\Projects\\college_score_card\\input\\")
+scorecard.df = read.csv("scorecard.csv",na.strings=c("","NULL"))
+# convert columns to factors
+scorecard.df$control <- as.factor(scorecard.df$control)
+scorecard.df$preddeg <- as.factor(scorecard.df$preddeg)
+scorecard.df$year <- as.integer(scorecard.df$year)
+```
+
+Next, we looked at the missing values. The following cell of code will:
+
+* print total missing values of each column.
+* print total missing values of each column per year.
+
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+## missing values
+sapply(scorecard.df, function(x) sum(is.na(x)))
+## missing values per year
+for (y in unique(scorecard.df$year)){
+  print(y)
+  print(dim(scorecard.df %>% filter(year==y)))
+  print(scorecard.df %>% filter(year==y)  %>% sapply(., function(x) sum(is.na(x))))
+  print("------------------------------------------------------------------------")
+}
+```
+
+The output is not show here due to it's length. This output was used to get a shortlist of variables for the analysis. This shortlist was further curated focusing on interesting feature relationships with the variable `control` (type of institution) which is the focus of this report. In addition, higher importance has been place on the last school year available (2014/15) to be able to inspect the most up to date information.
+
+Below, there is a custom function (`missing_values`) that helps study the missing values. This function will receive as parameters a feature name (`x`) and a range of years (`years`) and will output the missing values of that feature per each type of institution (`control`). This function has been heavily used during the creation of this report because it allowed us to study missing values in relation to the variable we are researching. An example of the output is shown below.
+
+```{r, message=FALSE, warning=FALSE}
+missing_values <- function(x, years=c(1996:2014)){
+  ### function that gets a feature and a range of years as parameters and 
+  ### returns missing values of that feature on those years in relation with
+  ### feature control.
+  scorecard.df %>% select_("year", "control", x) %>%
+    group_by(year, control) %>%
+    summarise_at(.cols = x, .funs = function(x) sum(is.na(x))) -> aux
+  scorecard.df %>% select_("year", "control", x) %>%
+    group_by(year, control) %>%
+    summarise(count=n())  %>%
+    left_join(aux, b, by = c("year","control")) -> aux
+  # Prints info
+  print.data.frame((aux %>% filter(year %in% years) %>% filter(!is.na(control))))
+} 
+
+missing_values("satmtmid", c(2012:2014))
+```
+
+The output above shows the missing values for the variable `satmtmid` for the years passed as an argument (per type of institution). The output will also give the total number of observations(`count`).
+
+In addition, We want to show the reader how many missing values per year has the variable `control` which we will study extensively in this report.
+
+```{r, message=FALSE, warning=FALSE}
+for (y in unique(scorecard.df$year)){
+  #calcuate missing values
+  mv <- scorecard.df %>%
+    select(year, control) %>%
+    filter(year==y)  %>%
+    sapply(., function(x) sum(is.na(x)))
+  #print
+  print(paste("YEAR:",y, "- Control Missing values:",mv["control"],"/",dim(scorecard.df %>% filter(year==y))[1]))
+}
+```
+
+`control` has no missing values, with the exception of year 2008 with only 23 missing values out of 6975 total observations. 
+
+Features are grouped in different topics. Through out this notebook we want to investigate each topic relation with the variable `control`, thus, during feature selection we have selected a subset of features of each topic under study. Here is a list of the categories that will be covered: school, admissions, cost, and earnings.
+
+Next cell does the feature selection according to the points expressed above.
+
+
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+########################## COLUMN SELECTION
+scorecard.df %>% select(year, instnm, region, control, preddeg, latitude,
+                        longitude, adm_rate_all, ugds_white, ugds_black,
+                        ugds_hisp, ugds_asian, mn_earn_wne_p6, costt4_a, 
+                        satvrmid, satmtmid, satwrmid) -> scorecard.df
+```
+
+
+
+## Dataset description
+
+The following table provides information of each selected feature such as category, units, and a short description:
+
+| Feature            | Category      |  Units        |  Description
+| ------------------ | ------------- | ------------- | -------------
+| instnm             | NA            | NA            | Institution name
+| year               | NA            | NA            | School year, eg. 2003 is school year 2003/2004
+| control            | NA            | NA            | Type of institution 
+| latitude           | NA            | degrees       | School longitude
+| longitude          | NA            | degrees       | School latitude
+| region             | school        | NA            | US region school is in
+| preddeg            | school        | NA            | Predominant undergraduate degree awarded
+| adm_rate_all       | admissions    | percent       | Admission rate for all campuses rolled up to the 6-digit OPE ID
+| satvrmid           | admissions    | NA            | Midpoint of SAT scores at the institution (critical reading)
+| satmtmid           | admissions    | NA            | Midpoint of SAT scores at the institution (math)
+| satwrmid           | admissions    | NA            | Midpoint of SAT scores at the institution (writing)
+| ugds_white         | student       | percent       | Total share of enrollment of undergraduate degree-seeking students who are white  
+| ugds_black         | student       | percent       | Total share of enrollment of undergraduate degree-seeking students who are black
+| ugds_hisp          | student       | percent       | Total share of enrollment of undergraduate degree-seeking students who are Hispanic
+| ugds_asian         | student       | percent       | Total share of enrollment of undergraduate degree-seeking students who are Asian
+| costt4_a           | cost          | U.S. dollars  | Average cost of attendance (academic year institutions)
+| mn_earn_wne_p6     | earnings      | U.S. dollars  |Mean earnings of students working and not enrolled 6 years after entry. Wage.
+
+## Variable summaries/relationships
+
+The following cell will show the class of each variable and some observations.
+
+```{r, message=FALSE, warning=FALSE}
+# variable type
+str(scorecard.df)
+```
+
+As `control` is the main focus of this report we want to see the number of each kind of institution per year.
+
+```{r, message=FALSE, warning=FALSE}
+# Number of institutions per year (by type)
+ggplot(data=subset(scorecard.df, !is.na(control)), aes(x=year, fill=control)) +
+  geom_bar(color="black", size=0.3,alpha = 0.7)+
+  xlab("Year") +
+  ylab("Number of Institutions") +
+  ggtitle("Number of Institutions in the report per year (by type)") + 
+  scale_x_discrete(limits=unique(scorecard.df$year)) +
+  theme(plot.title = element_text(size=16)) +
+  scale_fill_discrete(name = "Type of Institution:",
+                      labels = c("Public", "Private nonprofit", "Private for-profit"))+
+  theme(axis.text.x = element_text(size=6)) +
+  theme_bw()
+```
+
+The proportion of institutions is similar over time but the total number of institutions has an upward trend. Furthermore, the number of institutions increases over time except for the last year recorded (2014/2015).
+
+To get a sense of how these institutions are distributed along the U.S., the following map plots all institutions of the school year 2014/2015, the most up to date year on the data set, coloring them by type of institution.
+
+```{r, message=FALSE, warning=FALSE}
+# map institutions by type (2014/2015 last year with data)
+scorecard.df %>% filter(year==2014) %>% select(longitude, latitude, control) -> institutions2014
+
+ggmap(get_map("United States",zoom=4,color = "bw",maptype = "terrain")) +
+  geom_point(data=institutions2014,
+             aes(x=longitude,y=latitude,fill = control),alpha = 0.4, size = 1.5, shape = 21) +
+  ggtitle("Map of Institutions (2014/2015)") +
+  theme(plot.title = element_text(size=16)) +
+  scale_fill_discrete(name = "Type of Institution:",
+                      labels = c("Public", "Private nonprofit", "Private for-profit")) +
+  theme_bw()
+```
+
+We can see schools are around the most populated areas of the U.S. Public schools seem to have a higher presence in the center of the US. To get a better idea of how institutions are distributed we take a look at the total count numbers in each US region. 
+
+These are states in each region:
+
+* New England (CT, ME, MA, NH, RI, VT).		
+* Mid East (DE, DC, MD, NJ, NY, PA).		
+* Great Lakes (IL, IN, MI, OH, WI).		
+* Plains (IA, KS, MN, MO, NE, ND, SD).		
+* Southeast (AL, AR, FL, GA, KY, LA, MS, NC, SC, TN, VA, WV).		
+* Southwest (AZ, NM, OK, TX).		
+* Rocky Mountains (CO, ID, MT, UT, WY).		
+* Far West (AK, CA, HI, NV, OR, WA).
+* Outlying Areas (AS, FM, GU, MH, MP, PR, PW, VI).		
+
+The next plot standardizes each stack to have unit height to be able to compare the share of each type of institutions across each region in 2014.
+
+
+```{r, message=FALSE, warning=FALSE}
+# type of institution by region
+#missing_values("region", 2014)
+
+# remove region 0 U.S. Service Schools	IPEDS (few obs)
+scorecard.df %>% filter(year==2014) %>%
+  select(region, control) %>% 
+  filter(region!=0) -> institutions2014
+
+institutions2014$region <- as.factor(institutions2014$region)
+
+ggplot(institutions2014, aes(x=region, fill=control)) +
+  geom_bar(color=I("black"), size=0,alpha = 0.8,width=0.8, position="fill") +
+  xlab("Region") +
+  ylab("Count") +
+  ggtitle("Share of Institutions type by region (2014/2015)")+
+  scale_fill_discrete(name = "", labels = c("Public", "Private nonprofit", "Private for-profit")) +
+  scale_x_discrete(labels = c("New England", "Mid East", "Great Lakes","Plains","Southeast",
+                              "Southwest","Rocky Mountains","Far West","Outlying Areas")) +
+  theme(axis.text.x = element_text(angle=34,size=10,vjust=0.8),plot.title = element_text(size=16)) +
+  theme_bw()
+```
+
+The south and Rocky mountains have very few private nonprofit institutions and they have a big presence of private for-profit whereas New England and the Mid East have the highest Private nonprofit share and very few private for-profit institutions.
+
+The variable `pregdeg`, that falls under the **school** category, records the predominant undergraduate degree awarded, here are the different options:
+
+* Not classified.
+* Predominantly certificate-degree granting.
+* Predominantly associate's-degree granting.
+* Predominantly bachelor's-degree granting.
+* Entirely graduate-degree granting.
+
+The following code removes 'Not classified' option and shows the share of each category for each type of institution in the school year 2014/2015.
+
+
+```{r, message=FALSE, warning=FALSE}
+# missing_values("preddeg",2014)
+# removed "Non classify degree"
+scorecard.df %>% filter(year==2014) %>% 
+  select(control, preddeg) %>% 
+  filter(preddeg!=0) -> control_deg.df
+
+ggplot(data=subset(control_deg.df, !is.na(control)), aes(x=control, fill=preddeg)) +
+  geom_bar(color="black", size=0.3,alpha = 0.7, position="fill")+
+  xlab("Type of Institution") +
+  ylab("Number of Institutions") +
+  ggtitle("Predominat degree by type of institution (2014/2015)") + 
+  scale_x_discrete(labels = c("Public", "Private nonprofit", "Private for-profit")) +
+  theme(plot.title = element_text(size=16)) +
+  scale_fill_discrete(name = "Predominat degree",
+                      labels = c("Certificate-degree predominat", 
+                                 "Associate-degree predominat", 
+                                 "Bachelor's-degree predominat",
+                                 "Graduate-degree Entirely")) +
+  theme_bw()
+```
+
+
+The main take away form the plot above are:
+
+* Public institutions: There are very few institutions with predominant graduate degrees.
+* Private nonprofit: dominated by bachelor's degree.
+* Private for-profit: dominated by certificate's degree.
+
+Next we are examining relationships with **admission** category such as with feature `adm_rate_all` which shows the admission rate for all campuses. The following violin plot shows how the admission rate differ on different institution types.  
+
+```{r, message=FALSE, warning=FALSE}
+# admission rate (by type)
+scorecard.df %>% filter(year==2014) %>% 
+  select(control, adm_rate_all) %>%
+  filter(adm_rate_all!=0) -> adminisions_deg.df
+
+ggplot(data=subset(adminisions_deg.df, !is.na(control)), aes(x=control,y=adm_rate_all,fill=control)) +
+  geom_violin(scale = "count",color="black", size=0.3,alpha = 0.4)+
+  xlab("Type of institution") +
+  ylab("Admission rate") +
+  ggtitle("Admission rate by type of Institution (2014/2015)") +
+  theme(plot.title = element_text(size=16)) +
+  theme_bw() +
+  guides(fill=FALSE) +
+  scale_x_discrete(labels = c("Public", "Private nonprofit", "Private for-profit"))
+```
+
+The plot shows how private for-profit institutions have a much higher admission rate than public and nonprofit which rates are more spread out.
+
+Another interesting thing to see is how admissions have changed over time by type of institution. The data is aggregated by type of institution using the median of the admission rate. We only use data starting in 2001 due to the amount of missing values before that year.
+
+```{r, message=FALSE, warning=FALSE}
+# admission rate over time??
+scorecard.df %>% filter(!is.na(adm_rate_all)) %>% 
+  filter(!is.na(control)) %>% 
+  group_by(control, year) %>%
+  summarize("mean_adm_rate"=mean(adm_rate_all), "median_adm_rate"=median(adm_rate_all)) -> stats_adm.df
+
+ggplot(data=subset(stats_adm.df, !is.na(control)),
+       aes(x = year, y = mean_adm_rate, colour = control, fill=control)) +
+  geom_line(size=1,alpha = 1)+
+  ggtitle("Admission rate over time [by type of institution]") +
+  theme(plot.title = element_text(size=16)) + 
+  scale_x_discrete(limits=unique(stats_adm.df$year)) +
+  scale_color_discrete(labels = c("Public", "Private nonprofit", "Private for-profit"),
+                       name = "Type of Institution:") +
+  theme_bw()
+```
+
+
+The trend for both public and private nonprofit is clearly going downwards since 2001 with a little increase the last 2 years. On the other hand, private for profit admissions rate was very high in 2001, then they drop to a minimum in 2010 followed by an increase until reaching a very high admission rate.
+
+To get a snapshot of the lowest admission rates, which should mostly be private nonprofit as shown in the plot above, we check the top 35 institutions with the lowest admission rates in the school year 2014/2015. We colored them by type of institution.
+
+
+```{r, message=FALSE, warning=FALSE}
+# lowest admision rates 2014
+scorecard.df %>% filter(year==2014) %>% 
+  select(instnm, adm_rate_all, control) %>%
+  filter(adm_rate_all!=0) %>% 
+  arrange(adm_rate_all) %>% 
+  slice(1:40) %>% 
+  arrange(desc(adm_rate_all)) %>% 
+  mutate(adm_rate_all=round(adm_rate_all, 3))-> adminisions_deg.df
+  
+# to factor so ggplot doesn't order it for me
+adminisions_deg.df$instnm <- factor(adminisions_deg.df$instnm, levels = adminisions_deg.df$instnm)
+
+ggplot(adminisions_deg.df, aes(x=instnm, y=adm_rate_all,fill=control)) +
+  geom_bar(stat="identity", color = 'black', alpha=0.7) +
+  geom_text(aes(hjust=0.95, label=paste0(adm_rate_all, "%")), size=3) + 
+  theme(axis.text.y = element_text(hjust=1, color="black"), axis.text.x=element_blank()) +
+  xlab("") + ylab("") +
+  coord_flip() +
+  ggtitle("Lowest Admission Rate by type of inst. (14/15)") +
+  scale_fill_discrete(name = "Type of Institution:",
+                      labels = c("Public", "Private nonprofit", "Private for-profit")) +
+  theme_bw()
+```
+
+As expected most institutions are private nonprofit, the reader might recognize some institutions in the top positions such as Harvard, Stanford, and Yale. Only three public colleges make the list and just one private for-profit.
+
+Once crucial part of the admission process are the ACTs and SATs, standardized tests used for college admissions. The data set provides more data about SATs than ACTs. There are 3 sections on the SAT exam: critical reading, mathematics, and writing. We are going to explore the distribution of the results of these exams by type of institution. Each data point is the median SAT score at each institution. 
+
+```{r, message=FALSE, warning=FALSE}
+# explore 3 types of exam by type
+scorecard.df %>% select(control, year, satvrmid, satmtmid, satwrmid) %>% 
+  filter(year == 2014) %>%
+  filter(!(is.na(satmtmid) | is.na(satvrmid) | is.na(satwrmid))) %>%
+  gather("sat","score",3:5) -> sat.df
+
+# convert to factor to set separation lines
+sat.df$sat <- as.factor(sat.df$sat)
+# calculate position of separation lines
+myLoc1 <- (which(levels(sat.df$sat) == "satmtmid") + which(levels(sat.df$sat) == "satvrmid")) / 2
+myLoc2 <- (which(levels(sat.df$sat) == "satvrmid") + which(levels(sat.df$sat) == "satwrmid")) / 2
+
+ggplot(data=subset(sat.df, !is.na(control)), aes(x=sat,y=score,fill=control)) +
+  geom_violin(color="black", size=0.3,alpha = 0.4) +
+  ylab("Score") +
+  xlab("") +
+  ggtitle("SAT Scores by type of institution (2014/2015)") +
+  theme(plot.title = element_text(size=16)) +
+  scale_fill_discrete(name = "Type of Institution:", labels = c("Public", "Private nonprofit", "Private for-profit")) + 
+  geom_vline(aes(xintercept = myLoc1), linetype=4, colour="black") + #line
+  geom_vline(aes(xintercept = myLoc2), linetype=4, colour="black") + #line
+  scale_x_discrete(labels=c("satmtmid" = "STA Mathematics", "satvrmid" = "SAT Reading", "satwrmid" = "SAT Writing"))  +
+  theme_bw()
+```
+
+Students tend to do better in mathematics and worse in writing. Also, the smallest range of scores is found is in the private for profit while the biggest range is found in the private for profit, including the highest scores and the lowest.
+
+In addition to this information, we want to check how these scores have changed over time. Each year aggregates the data of all institutions of the same type. Due to missing values only data after 2006 is used.
+
+```{r, message=FALSE, warning=FALSE}
+# sats per control over time
+scorecard.df %>% select(control, year, satvrmid, satmtmid, satwrmid)  %>% 
+  filter(!(is.na(satmtmid) | is.na(satvrmid) | is.na(satwrmid))) %>% 
+  group_by(control, year) %>%
+  summarize("sat.math"=median(satmtmid),"sat.read"=median(satvrmid),"sat.write"=median(satwrmid)) %>%
+  gather("sat","score",3:5) -> sat_year_control.df
+
+ggplot(data =sat_year_control.df, mapping = aes(x = year, y = score, shape = sat,
+                                                color = control, fill=control)) +
+  geom_line(size=1.3,alpha = 0.7, aes(color=control))+
+  ggtitle("Median SATs scores by type of institution") + 
+  facet_grid(facets = sat ~ .) +
+  theme_bw() +
+  scale_colour_manual(values=c("1"="#F8766D", "2"="#00BA38", "3"="#00BFC4"), 
+                      labels=c("Public", "Private non-profit", "Private for-profit"),
+                      name = "Type of Institution:")
+```
+
+The is a big correlation among each type exam by institution. Private nonprofit and public have been stabled with high scores across the years, public non profit is always a step above public. Private for profit varies more but also has less data which could be the cause of this variability.
+
+Other category found in the data set is **students**, we seek to understand the student demographics of each type of institution. Next plot shows the share enrollment of undergraduate students who are White, Black, Asian, and Hispanic, stating in the year 2010. Observations that doesn't account for at least half of the total share are not count due to reliability of the data. Each year the data is aggregated by type of institution using the median.
+
+```{r, message=FALSE, warning=FALSE}
+# the filter at 0.5 let's me know which rows are more or less complete
+scorecard.df %>% select(year, control, ugds_white, ugds_black, ugds_hisp, ugds_asian, longitude, latitude) %>%
+  filter(year>2007) %>%
+  na.omit() %>% 
+  mutate(sum = rowSums(.[3:6])) %>% 
+  filter(sum>0.5) -> demogra.df
+# lets filter again because good data is nonly from 2010
+scorecard.df %>% select(year, control, ugds_white, ugds_black, ugds_hisp, ugds_asian, longitude, latitude) %>%
+  filter(year>2009) %>% 
+  mutate(sum = rowSums(.[3:6])) %>%
+  filter(sum>0.5) -> demogra.df
+
+# per control over time
+demogra.df %>% group_by(control, year) %>% 
+  summarize("median_white"=median(ugds_white), "median_black"=median(ugds_black),
+            "median_hispanic"=median(ugds_hisp), "median_asian"=median(ugds_asian)) %>%
+  gather("race","value",3:6)  -> demogra.cy.df 
+
+ggplot(data =demogra.cy.df, mapping = aes(x = year, y = value, shape = race,
+                                          colour = control, fill=control)) +
+  geom_line(size=1.2,alpha = 0.4, aes(color=control))+
+  ggtitle("Demografics by type of institution") + 
+  facet_grid(facets = race ~ .) +
+  theme_bw() +
+  scale_colour_manual(values=c("1"="#F8766D", "2"="#00BA38", "3"="#00BFC4"), 
+                      labels=c("Public", "Private non-profit", "Private for-profit"),
+                      name = "Type of Institution:")
+```
+
+Private for-profit has the most diversity and private non-profit and public have similar numbers.
+
+The next category in the data set is **cost**. A big concern for families nowadays is the high tuition prices. The following violin plot shows the distribution of the average annual total cost of attendance, including tuition and fees, books and supplies, and living expenses for all full-time, first-time, degree/certificate-seeking undergraduates who receive Title IV aid (`costt4_a`). Data is from 2014/2015, the most up to date year.
+
+
+```{r, message=FALSE, warning=FALSE}
+# prices/control
+scorecard.df %>% select(year, control, costt4_a, tuitionfee_in, tuitionfee_out) %>% 
+  filter(year == 2014) %>%
+  rowwise() -> cost.df
+
+ggplot(data=subset(cost.df, !is.na(control)), aes(x=control,y=costt4_a,fill=control)) +
+  geom_violin(scale = "count",color="black", size=0.3,alpha = 0.4)+
+  xlab("Type of institution") +
+  ylab("Cost") +
+  ggtitle("Average cost per institution type (2014/2015)") +
+  theme(plot.title = element_text(size=16),axis.text.y=element_blank()) +
+  coord_flip() +
+  scale_fill_discrete(name = "Type of Institution:",
+                      labels = c("Public", "Private nonprofit", "Private for-profit")) +
+  theme_bw()
+```
+
+Public institutions are cheaper with almost of its costs in the $10.000-$24.000 range. Private for-profit is in the middle with a range of $20.000-$30.000. Private nonprofit is more spread out with costs that go from less than $10.000 to costs above $60.000.
+
+It is known that tuition is increasing, the following plot aims to prove this statement showing the median cost per type of institution over time. Plot starts in 2009.
+
+```{r, message=FALSE, warning=FALSE}
+# price overtime
+scorecard.df %>% filter(!is.na(costt4_a)) %>% 
+  filter(!is.na(control)) %>% 
+  group_by(control, year) %>%
+  summarize("mean_costt4_a"=mean(costt4_a), "median_acostt4_a"=median(costt4_a)) -> cost.df
+
+ggplot(data=subset(cost.df, !is.na(control)), aes(x = year, y = mean_costt4_a, colour = control, fill=control)) +
+  geom_line(size=1,alpha = 1)+
+  ggtitle("Average cost per institution type of time (meadian)") +
+  ylab("Cost") +
+  theme(plot.title = element_text(size=16)) + 
+  scale_x_discrete(limits=unique(cost.df$year)) +
+  scale_color_discrete(labels = c("Public", "Private nonprofit", "Private for-profit"),
+                       name = "Type of Institution:") +
+  theme_bw()
+```
+
+Prices have an upward trend in all types of institution, being this trend more noticeable in private nonprofit institutions and very weak in private for-profit.
+
+The last topics under study is **earnings**, we analyze the relationship of `cost` and mean earnings of students working and not enrolled 6 years after entry (`mn_earn_wne_p6`) to see what type of institution provides the best value for every dollar spent in tuition. 
+
+```{r, message=FALSE, warning=FALSE}
+scorecard.df %>% select(year, control, costt4_a, mn_earn_wne_p6) %>% 
+  filter(!is.na(costt4_a)) %>%
+  filter(!is.na(control))  %>%
+  filter(!is.na(mn_earn_wne_p6))-> best.df
+
+best.df$mn_earn_wne_p6 <- as.numeric(best.df$mn_earn_wne_p6)
+
+ggplot(data=best.df, aes(x = costt4_a, y = mn_earn_wne_p6 , colour = control)) +
+  geom_point(size=1,alpha = 0.3)+
+  ggtitle("College price vs Earings") +
+  xlab("Cost") +
+  ylab("Earnings 6 years") +
+  theme(plot.title = element_text(size=16)) +
+  scale_color_discrete(labels = c("Public", "Private nonprofit", "Private for-profit"),
+                       name = "Type of Institution:") +
+  theme_bw()
+```
+
+The main conclusion from the plot above is that public institutions give students the same earnings after 6 years than private institutions for less cost. The biggest earnings come from nonprofit institutions which also happen to be the most expensive.
+
+
+## Conclusion
+
+The main goal of this report was to provide the reader with a comparison of the different types of educational institution across all different categories of the College Score Card data set. The report shows clear differences and many similarities that may have been unknown to the public before. 

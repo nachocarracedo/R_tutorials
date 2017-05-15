@@ -1,0 +1,622 @@
+---
+title: "MA710 - New York Times Articles"
+author: "Ignacio Carracedo"
+date: "30 Mar 2017"
+output:
+  html_document:
+    toc: yes
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(cluster)
+library(RCurl)
+library(RJSONIO)
+library(rlist)
+library(stringr)
+library(dplyr)
+library(magrittr)
+library(RTextTools)
+library(ngram)
+library(bitops)
+library(tm)
+
+options(dplyr.width=Inf)
+articlesearch.key = "f1b0b7570f7370114de0df19a3722f8e:7:68259170"
+
+###### ALL FUNCTIONS USED IN THIS MARKDOWN. THIS CODE IS NOT SHOWN. ###### 
+###### FUNTIONS PROVIDED BY Prof. David Oury. Bentley University.   ######
+
+# Create a single row data frame from a list
+dfrow.from.list = function(aList) { 
+  data.frame(rbind(unlist(aList)),
+             stringsAsFactors=FALSE)
+}
+
+# Return: number of hits for a query.string with begin.date and end.date
+get.nyt.hits = function(query.string="", # single word only (REQUIRED)
+                        begin.date="",   # yyyymmdd (REQUIRED)
+                        end.date=""      # yyyymmdd (REQUIRED)
+) { 
+  str_c(# create query string to send to NYT
+    "http://api.nytimes.com", 
+    "/svc/search/v2/articlesearch.json",
+    "?api-key=",    articlesearch.key,
+    "&q=",          str_replace_all(query.string," ","%20"),
+    "&begin_date=", begin.date,
+    "&end_date=",   end.date
+  ) %>%
+    getURL() %>%             # retreive data from NYT
+    fromJSON() %>%           # convert from JSON to a list
+    { .$response$meta['hits'] }
+}
+
+get.nyt.page = function(page=0,          # page number (default: 0)
+                        query.string="", # single word only (REQUIRED)
+                        begin.date="",   # yyyymmdd (REQUIRED)
+                        end.date=""      # yyyymmdd (REQUIRED)
+) { 
+  str_c(# create query string to send to NYT
+    "http://api.nytimes.com", 
+    "/svc/search/v2/articlesearch.json",
+    "?api-key=",    articlesearch.key,
+    "&q=",          str_replace_all(query.string," ","%20"),
+    "&begin_date=", begin.date,
+    "&end_date=",   end.date,
+    "&page=",       page
+  ) %>%
+  {Sys.sleep(1); .} %>%    # wait 1s (rate limit of 5 requests per second)
+    getURL() %>%             # retreive data from NYT
+    fromJSON() %>%           # convert from JSON to an R list
+    { .$response$docs } %>%  # retrieve only the documents
+    list.select(             # keep only these four fields
+      headline=as.character(headline["main"]), 
+      snippet, 
+      lead_paragraph, 
+      abstract,
+      pub_date) %>% 
+    lapply(dfrow.from.list) %>% # convert each list item to a dataframe
+    bind_rows                # create a single dataframe
+}
+
+get.nyt.articles = function(pages=0,         # vector of page numbers
+                            query.string="", # single word only (REQUIRED)
+                            begin.date="",   # yyyymmdd (REQUIRED)
+                            end.date=""      # yyyymmdd (REQUIRED)
+) { 
+  if (pages[1] == -1) { 
+    pages = 0:floor(get.nyt.hits(query.string=query.string,
+                                 begin.date=begin.date, 
+                                 end.date=end.date) / 10)
+  }
+  lapply(pages,
+         get.nyt.page, 
+         query.string=query.string,
+         begin.date=begin.date,
+         end.date=end.date
+  ) %>%  
+    bind_rows()
+}
+
+# Clean documents
+clean.documents = function (document.vector) {
+  document.vector %>% # document.vector = docs[93:94]
+    tolower() %>%                           # change to lower case
+    str_replace_all("'s","")            %>% # remove "'s"
+    str_replace_all("’s","")            %>% # remove "’s"
+    str_replace_all("\\$","")           %>% # remove dollar signs
+    str_replace_all("\\#","")           %>% # remove # signs
+    str_replace_all("\\?","")           %>% # remove ? signs
+    str_replace_all("\\!","")           %>% # remove ! signs
+    str_replace_all("\\.","")           %>% # remove periods
+    str_replace_all("[[:digit:]]+"," ") %>% # change numbers to a space
+    str_replace_all("[[:punct:]]"," ")  %>% # change punctuation to a space
+    str_replace_all("[[:blank:]]+"," ") %>% # change white space to a space
+    str_trim(side = "both")                 # remove spaces at the ends
+}
+
+# Create strings of n-grams
+modify.words = function(document.vector, 
+                        stem.words=FALSE, 
+                        ngram.vector=1, 
+                        stop.words=c()) {
+  document.vector %>% # document.vector = docs.clean
+    str_split("[[:space:]]") %>%            
+    lapply(function(x) setdiff(x,stop.words)) %>%
+    { if(stem.words) lapply(., wordStem) 
+      else . 
+    } %>% 
+    lapply(function(x) { 
+      ngrams(x,ngram.vector) %>%
+        lapply( function(x) paste(x,collapse="")) %>% 
+        paste(collapse=" ") 
+    })
+}
+
+
+reduce.dtm = function (dtm, freq.threshold) {
+  word.counts=colSums(dtm)
+  new.columns = names(word.counts)[freq.threshold<=word.counts]
+  dtm[,new.columns]
+}
+
+# List the ten most common words in cluster i
+TopWords = function (dtm, clusters, i) { 
+  dtm_names = colnames(dtm)
+  row_count = sum(clusters==i)
+  dtm_csums =
+    apply(matrix(dtm[clusters==i,], nrow=row_count),
+          2,
+          mean)
+  names(dtm_csums) = dtm_names
+  dtm_ndx = order(dtm_csums, decreasing=TRUE)[1:17]
+  bind_rows(
+    data.frame(word=paste(c("[cluster ",
+                            formatC(i, format="f", digits=0),
+                            "]"), 
+                          collapse=""),
+               avg=NA),
+    data.frame(word=paste(c("[",
+                            formatC(row_count, format="f", digits=0),
+                            " records]"), 
+                          collapse=""),
+               avg=NA),
+    data.frame(word=dtm_names[dtm_ndx], 
+               avg=dtm_csums[dtm_ndx])
+  )
+}
+
+check.clusters = function(cluster, count.min) { 
+  cluster.counts = table(cluster)
+  as.numeric(names(cluster.counts)[cluster.counts >= count.min]) %>%
+    lapply(function(clnum) { # clnum=1
+      TopWords(dtm,cluster,clnum) 
+    }) %>%
+    bind_cols()
+} 
+
+view.dtm = function(cluster.number) {
+  docs[res$cluster==cluster.number]
+}
+view.cluster = function(cluster.number) {
+  docs[cluster==cluster.number]
+}
+
+```
+
+
+# Introduction
+
+The New York Times is one of the most popular newspapers in the world. It was founded in 1851 and it has won 122 Pulitzer Prizes, more than any other newspaper. 
+
+In this report, we will filter articles keeping only the ones that have the word "Spain" in it. Our objective is to cluster these articles to get a better understanding of the different topics of each cluster.
+  
+# Create the dataset
+
+To download the articles we will make use of the New York Times API. We select 3 months worth of news stating in January 15h, this will be enough to get a sense of all Spanish related news. At the same time, it will keep the number of articles manageable so we are able to inspect them to validate the cluster's topics.
+
+The following block of code downloads the articles mentioned above using the NYT API and stores them in a data frame (`article.df`):
+
+```{r, eval=FALSE}
+article.df = get.nyt.articles(pages = -1, # all articles
+                              query.string = "Spain",     
+                              begin.date   = "20170115",  
+                              end.date     = "20170315")    
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+setwd("C:/Users/carrai1/Desktop/Projects/nytimes_nlp/data")
+article.df = read.csv("nyt_spain.csv")
+```
+
+Let's see how many articles we have downloaded:
+
+```{r, message=FALSE, warning=FALSE}
+nrow(article.df) 
+```
+
+We have 621 articles. We now save the data a as *csv* file so we can load it again if needed:
+
+```{r, message=FALSE, warning=FALSE, eval=FALSE}
+write.csv(file=("nyt_spain.csv"), x=article.df, row.names = FALSE)
+```
+
+Now, we are ready to start the base investigation. If the results of the clustering are not convincing we will follow with more investigations until we are happy with the results.
+
+# Base investigation
+
+The following table shows the options chosen in the base investigation to create the feature matrix. It also gives a brief explanation of why each of the parameters was chosen:
+
+Parameter | Value | Reason
+--------- | ----- | ------
+Query term | "Spain" | We are interested in articles that talk about the country "Spain"
+Begin date | 15 Jan 2017 | We skip the first 15 days of the year to avoid holidays' related articles
+End date   | 15 March 2017 | 3 months of articles
+Field      | `headline` + `snippet`  | We concatenate both features to get more information for clustering
+Stemming   | Yes | Maps related words to the same base word (root)
+N-grams    | 1 | It gets sequences of only 1 word. 
+Stop words  | "english" | It removes fewer stop words (174) than "SMART" (571)
+Other Stop words  | "" | None 
+Weighting  | TF-IDF | It weights more the less common words across all articles. 
+Threshold  | 1 | It keeps words that appear at least 1 time
+Algorithm  | k-means | Base clustering algorithm
+`k`        | 5 | 5 seems a reasonable number of clusters to group newspaper articles
+
+First, we concatenate `headline` and `snippet` to create our body of articles. We expect than concatenating both fields will give the algorithm more information to generate the clusters:
+
+```{r, message=FALSE, warning=FALSE}
+article.df$text = paste(as.vector(article.df$headline),as.vector(article.df$snippet))
+docs = article.df$text 
+```
+
+Next, we remove punctuation and other symbols using the provided function `clean.documents`:
+
+```{r, message=FALSE, warning=FALSE}
+docs.clean = clean.documents(docs)
+```
+
+The following cell performs the following actions:
+
+* Stemming
+* 1-gram
+* Remove "english" stop words
+
+```{r, message=FALSE, warning=FALSE}
+docs.sns = 
+  modify.words(
+    docs.clean,  
+    stem.words=TRUE,  
+    ngram.vector=1:1, 
+    stop.words= c(stopwords(kind="english")  
+       )
+  )
+```
+
+We now have the text ready to convert it to a feature matrix using TF-IDF (term frequency-inverse document frequency):
+
+```{r, message=FALSE, warning=FALSE}
+doc.matrix <- 
+  create_matrix(docs.sns, 
+                language="english",      
+                stemWords=FALSE,         
+                removePunctuation=FALSE, 
+                weighting=tm::weightTfIdf   
+  )
+
+doc.matrix
+```
+
+We end up we a sparse matrix where 99% of values are 0. The matrix has as features the steamed words (3756)
+
+To cluster the articles we need to convert the sparse matrix object to a matrix:
+
+```{r, message=FALSE, warning=FALSE}
+dtm = as.matrix(doc.matrix)
+```
+
+Next, we proceed to cluster the data. We choose to apply Kmeans with 5 clusters which seems appropriate based on domain knowledge of categories in a newspaper:
+
+```{r, message=FALSE, warning=FALSE}
+k = 5
+set.seed(3)
+cluster = kmeans(dtm,k)$cluster
+results<-data.frame(cluster_ = cluster, docs_ = docs)
+```
+
+### Evaluation: cluster counts 
+
+The table below indicates the number of articles that are contained in each cluster: 
+
+```{r, message=FALSE, warning=FALSE}
+as.data.frame(table(cluster))
+```
+
+Clusters 5 and 4 have most of the articles while clusters 2 and 3 have very few. At first sight this doesn't seem very good but we need to inspect the characteristics of each cluster to be sure.
+
+### Evaluation: common words 
+
+We use the function `check.clusters` to assess the clusters. The function gives us the top words (17) of each cluster:
+
+```{r, message=FALSE, warning=FALSE}
+options(warn=-1)
+check.clusters(cluster,1) 
+options(warn=0)
+```
+
+From the output above we can infer the following:
+
+* Cluster 1: All words are related to tennis. It looks like good clustering.
+* Cluster 2: This cluster only has 9 records, it is difficult to tell if there is a single topic by looking at the top words. We need to check the articles.
+* Cluster 3: It only has 2 records. we need to check the articles.
+* Cluster 4: By looking at the top words it seems that the topic is politics but we need to inspect the articles more closely to be sure.
+* Cluster 5: The topic of this cluster is clearly soccer. It looks like good clustering.
+
+2 out 5 clusters have a clear topic, the rest don't. We are going to inspect some articles of each cluster to see if there is a common topic.
+
+### Evaluation: check documents  
+
+We use the function `view.cluster` to check a few articles of each cluster:
+
+* Cluster 1:
+
+```{r, message=FALSE, warning=FALSE}
+view.cluster(1)[1:5]
+```
+ 
+The output above confirms that the topic is Tennis.
+
+* Cluster 2: 
+
+```{r, message=FALSE, warning=FALSE}
+view.cluster(2)[1:3]
+```
+
+This cluster is formed by articles that are identical. These articles don't have much information so we can treat this cluster as "outliers" or "no topic".
+
+* Cluster 3:
+
+```{r, message=FALSE, warning=FALSE}
+view.cluster(3)[1:2]
+```
+
+Again, this cluster is formed by 2 articles that are identical. We can also treat this cluster as "outliers" or "no topic".
+
+* Cluster 4:
+
+```{r, message=FALSE, warning=FALSE}
+view.cluster(4)[1:8]
+```
+
+This cluster has several topics, in the sample above we see articles talking about politics and culture among others.
+
+* Cluster 5:
+
+```{r, message=FALSE, warning=FALSE}
+view.cluster(5)[1:5]
+```
+
+Even though we thought this cluster was only soccer we now see that other sports are also included (motorcycle and tennis) 
+
+We have confirmed that the clustering is not good enough. Cluster 1 is the only group with one topic. On the other hand, cluster 5 mixes sports, cluster 4 seems to aggregate many topic whereas clusters 2 and 3 group identical articles.
+
+We think we can do much better so we are going to change some parameters and create another set of clusters.
+
+# Investigation 2
+
+We are changing 2 parameters from the base investigation:
+
+* N-grams: In addition to 1 word n-grams we also want to capture sequences of 2 words, e.g "champions league". 
+* Stop words: we observed many words that didn't add any relevant information so we are switching stop words from "english" to "SMART" which removes a larger quantity of words (571 vs 174).
+
+Here is a summary of all the options:
+
+Parameter | Value | Reason
+--------- | ----- | ------
+Query term | "Spain" | We are interested in articles that talk about the country "Spain"
+Begin date | 15 Jan 2017 | We skip the first 15 days of the year to avoid holidays' related articles
+End date   | 15 March 2017 | 3 months of articles
+Field      | `headline` + `snippet`  | We concatenate both features to get more information for clustering
+Stemming   | Yes | It maps related words to the same base word (root)
+N-grams    | 1:2 | It gets sequences of 1 and 2 words (larger feature matrix)
+Stop words  |  "SMART" | It removes more stop words (571) than "english" (174)
+Other Stop words  | "" | None 
+Weighting  | TF-IDF | It weights more the less common words across all articles
+Threshold  | 1 | It keeps words that appear at least 1 time
+Algorithm  | k-means | Base clustering algorithm
+`k`        | 5 | 5 seems a reasonable number of clusters to classify newspaper articles.
+
+The following cell will create the feature matrix with the options above:
+
+```{r, message=FALSE, warning=FALSE}
+docs.sns = 
+  modify.words(
+    docs.clean,  
+    stem.words=TRUE,  
+    ngram.vector=1:2, 
+    stop.words=       
+      c(stopwords(kind="SMART")  
+       )
+  )
+
+doc.matrix <- 
+  create_matrix(docs.sns, 
+                language="english",      
+                stemWords=FALSE,         
+                removePunctuation=TRUE, 
+                weighting=tm::weightTfIdf
+  )
+
+doc.matrix
+```
+
+As we can see the matrix is larger than the previous one because we are now adding 2-grams (13498). Next, we cluster the articles:
+
+```{r, message=FALSE, warning=FALSE}
+dtm = as.matrix(doc.matrix)
+k = 5
+set.seed(3)
+cluster = kmeans(dtm,k)$cluster
+results<-data.frame(cluster_ = cluster, docs_ = docs)
+```
+
+### Evaluation: cluster counts 
+
+The table below shows the number of articles that are contained in each cluster: 
+
+```{r, message=FALSE, warning=FALSE}
+as.data.frame(table(cluster))
+```
+
+Again, we end up with clusters that have very few articles (2, 3, and 4). Cluster 5 has most of the articles. 
+
+Judging by these numbers it doesn't seem to be a better clustering that the previous one. Let's check top words to be sure.
+
+### Evaluation: common words 
+
+Let's use the function `check.clusters` to get the top common words of the clusters:
+
+```{r, message=FALSE, warning=FALSE}
+options(warn=-1)
+check.clusters(cluster,1) 
+options(warn=0)
+```
+
+From the output above we can infer the following:
+
+* Cluster 1: All words are related with tennis, same as in the base investigation
+* Cluster 2 and 3: Same as in base investigation, identical articles
+* Cluster 4: Very few articles, same case as clusters 2 and 3.
+* Cluster 5: It contains the rest of the topics
+
+We haven't improved the results of the base investigation, actually, the clustering looks worse.
+
+There is no need to explore further; to improve the clustering we need to change other parameters.
+
+# Investigation 3
+
+In the previous investigation we noticed that most of the words were relevant, thus, removing SMART stop words seemed to have worked fine but we did notice a few words that showed in all clusters that didn't seem to help. These words are all related with time, we will add them to the stop words.
+
+Weighting more the words that show up fewer times across the documents (TF-IDF) hasn't work well. This time we are going to weight all words the same (weightTf). 
+
+We won't change any other parameter as this is a big change (values in the feature matrix will change considerably). Here is a summary of all parameters' values:
+
+Parameter | Value | Reason
+--------- | ----- | ------
+Query term | "Spain" | We are interested in articles that talk about the country "Spain"
+Begin date | 15 Jan 2017 | We skip the first 15 days of the year to avoid holidays' related articles
+End date   | 15 March 2017 | 3 months of articles
+Field      | `headline` + `snippet` | We concatenate both features to get more information for clustering
+Stemming   | Yes | It maps related words to the same base word (root)
+N-grams    | 1:2 | It gets sequences of 1 and 2 words
+Stop words  |  "SMART" | It removes more stop words (571) than "english" (174)
+Other Stop words  | "monday", "tuesday", "wednesday", "thrusday", "friday", "saturday", "sunday", "year", "day", "week", "month", "time", "start" | We add time related words which don't bring any benefit to the clustering as these words are contained in most of the articles 
+Weighting  | weightTf | It weights all words the same
+Threshold  | 1 | It keeps words that appear at least 1 time
+Algorithm  | k-means | Base clustering algorithm. 
+`k`        | 5 | 5 seems a reasonable number of clusters to classify newspaper articles.
+
+The following cell will create the feature matrix. This matrix is used for clustering:
+
+```{r, message=FALSE, warning=FALSE}
+docs.sns = 
+  modify.words(
+    docs.clean,  
+    stem.words=TRUE,  
+    ngram.vector=1:2, 
+    stop.words=       
+      c(stopwords(kind="SMART"),
+        "monday", "tuesday",
+        "wednesday","thursday",
+        "friday","saturday",
+        "sunday","year","day",
+        "week","month","time",
+        "start"  
+      )
+  )
+
+doc.matrix <- 
+  create_matrix(docs.sns, 
+                language="english",     
+                stemWords=FALSE,        
+                removePunctuation=TRUE, 
+                weighting=tm::weightTf
+  )
+
+dtm = as.matrix(doc.matrix)
+k = 5
+set.seed(3)
+cluster = kmeans(dtm,k)$cluster
+results<-data.frame(cluster_ = cluster, docs_ = docs)
+```
+
+### Evaluation: cluster counts 
+
+The table below indicates the number of articles that are contained in each cluster:
+
+```{r, message=FALSE, warning=FALSE}
+as.data.frame(table(cluster))
+```
+
+The number of articles in each cluster is more balanced than on the previous investigations. 
+
+### Evaluation: common words 
+
+Let's use the function `check.clusters` to get the top words of each cluster:
+
+```{r, message=FALSE, warning=FALSE}
+options(warn=-1)
+check.clusters(cluster,1) 
+options(warn=0)
+```
+
+From the output above we can infer the following:
+
+* Cluster 1: The topic is tennis
+* Cluster 2: This cluster has political and international words. 
+* Cluster 3: It has politics words, more specifically, European related articles.
+* Cluster 4: It has politics words, more specifically, national (Spain) related articles.
+* Cluster 5: The topic is soccer
+
+Clusters 1 and 5 are easy to categorize as all the top words are related to one and only one topic. For the other clusters, we need to inspect them further to make sure if there is a common topic.
+
+### Evaluation: check documents  
+
+We check some articles of each cluster to validate the clusters' topics:
+
+* Cluster 1:
+
+```{r, message=FALSE, warning=FALSE}
+view.cluster(1)[1:5]
+```
+ 
+The output above clearly confirms that the topic of this cluster is tennis.
+
+* Cluster 2: 
+
+```{r, message=FALSE, warning=FALSE}
+view.cluster(2)[1:8]
+```
+
+This cluster has a mix of topics, it is difficult to categorize. This cluster could contain all news not grouped by other clusters if no other cluster contains another mix of topics. Let's keep checking the rest of the clusters.
+
+* Cluster 3:
+
+```{r, message=FALSE, warning=FALSE}
+view.cluster(3)[1:8]
+```
+
+As pointed out when examining top words, this cluster contains articles about European news.
+
+* Cluster 4:
+
+```{r, message=FALSE, warning=FALSE}
+view.cluster(4)[1:8]
+```
+
+This cluster is formed by national (Spanish) news.
+
+* Cluster 5:
+
+```{r, message=FALSE, warning=FALSE}
+view.cluster(5)[1:5]
+```
+
+The output above confirms that the topic of this cluster is soccer. 
+  
+# Conclusion
+
+After iterating three times and improving the parameters to create the feature matrix we end up with 5 clusters. Here are the topics of each cluster:
+
+* Cluster 1: Tennis.
+* Cluster 2: Other news. 
+* Cluster 3: European related articles.
+* Cluster 4: National related articles.
+* Cluster 5: Soccer.
+
+All clusters but cluster number 2 have a clear topic. Cluster 2 has mostly news that doesn't fit on any other cluster. In order to arrive to this clustering we did a few key transformations:
+
+* N-grams: 1 and 2 sequence words. 
+* Stop words: "SMART" plus time words ("monday", "tuesday", "wednesday", "thrusday", "friday", "saturday", "sunday", "year", "day", "week", "month", "time", "start")
+* Weighting: Term frequency instead of TF-IDF.
+
+With these parameters we were able to get clearly defined clusters with articles that contain the word "Spain".
+
